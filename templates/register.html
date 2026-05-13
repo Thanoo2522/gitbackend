@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>สมัครสมาชิก</title>
+
+  <script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
+
+  <style>
+    body {
+      font-family: Arial;
+      max-width: 400px;
+      margin: auto;
+      padding: 20px;
+    }
+
+    h2 {
+      text-align: center;
+      font-size: 20px;
+    }
+
+    input {
+      width: 100%;
+      padding: 10px;
+      margin: 6px 0;
+      font-size: 14px;
+    }
+
+    button {
+      width: 100%;
+      padding: 12px;
+      font-size: 16px;
+      background: #06c755;
+      color: white;
+      border: none;
+      border-radius: 8px;
+    }
+  </style>
+</head>
+
+<body>
+
+<h2>สมัครสมาชิก</h2>
+
+<input id="name" placeholder="ชื่อติดต่อ">
+<input id="home" placeholder="ชื่อหมู่บ้าน">
+<input id="address" placeholder="ที่อยู่">
+<input id="phone" placeholder="เบอร์โทร">
+
+<button onclick="register()">สมัคร</button>
+
+<script>
+
+let API_URL = ""
+let LIFF_ID = ""
+let OFM = ""
+
+// 🔥 เปลี่ยนเป็น URL Cloud Run ของคุณ
+const BASE_URL = "https://server-ofm-419896870147.asia-southeast1.run.app"
+
+// ================= GET OFM =================
+function getOfmFromUrl() {
+  const urlParams = new URLSearchParams(window.location.search)
+  let ofm = urlParams.get("ofm")
+
+  // 🔥 fallback กรณี LIFF redirect แล้ว query หาย
+  if (!ofm) {
+    const context = liff.getContext()
+    if (context && context.referrer && context.referrer.extra) {
+      ofm = context.referrer.extra.ofm
+    }
+  }
+
+  return ofm
+}
+
+// ================= INIT =================
+async function initApp() {
+  try {
+    // 1. ต้อง init LIFF ก่อนเสมอ เพื่อให้ liff.getContext() ทำงานได้
+    await liff.init({ liffId: "2009858553-w282abVT" }) // ใส่ ID ไปตรงๆ ก่อนเพื่อเริ่มระบบ
+
+    if (!liff.isLoggedIn()) {
+      liff.login()
+      return
+    }
+
+    // 2. ดึงค่า ofm จาก URL หรือจาก Context ของ LIFF
+    const urlParams = new URLSearchParams(window.location.search)
+    OFM = urlParams.get("ofm")
+
+    // ถ้าใน URL ไม่มี (เพราะโดน Redirect) ให้หาใน Context
+    if (!OFM) {
+      const context = liff.getContext()
+      // ถ้าส่งผ่าน liff.line.me/xxx?ofm=... ค่าจะอยู่ในเครื่องหมาย ?
+      // หรือคุณอาจต้องใช้ liff.state เพื่อดึงค่ากลับมา
+    }
+
+    if (!OFM) {
+      alert("❌ ไม่พบชื่อร้าน (ofm)")
+      return
+    }
+
+    console.log("OFM Found:", OFM)
+
+    // 3. เมื่อได้ OFM แล้วค่อยไปดึง Config
+    const encodedOFM = encodeURIComponent(OFM)
+    const res = await fetch(`${BASE_URL}/config/${encodedOFM}`)
+    const config = await res.json()
+
+    if (config.status === "ok") {
+      API_URL = config.apiUrl.trim()
+      console.log("✅ Ready to Register")
+    } else {
+      alert("❌ ไม่พบข้อมูลร้านในระบบ")
+    }
+
+  } catch (err) {
+    console.error("INIT ERROR:", err)
+    alert("เกิดข้อผิดพลาดในการโหลดข้อมูล")
+  }
+}
+
+
+initApp()
+
+// ================= REGISTER =================
+async function register() {
+  try {
+
+    const profile = await liff.getProfile()
+
+    const name = document.getElementById("name").value
+    const home = document.getElementById("home").value
+    const address = document.getElementById("address").value
+    const phone = document.getElementById("phone").value
+
+    if (!name || !home || !address || !phone) {
+      alert("กรุณากรอกข้อมูลให้ครบ")
+      return
+    }
+
+    const data = {
+      ofm: OFM,
+      userId: profile.userId,
+      name: name,
+      home: home,
+      address: address,
+      phone: phone
+    }
+
+    console.log("SEND:", data)
+
+    const res = await fetch(API_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(data)
+    })
+
+    const json = await res.json()
+
+    console.log("RESULT:", json)
+
+    if (json.status === "ok") {
+      alert("สมัครสำเร็จ ✅")
+      liff.closeWindow()
+    } else {
+      alert("สมัครไม่สำเร็จ ❌")
+    }
+
+  } catch (err) {
+    console.error("REGISTER ERROR:", err)
+    alert("สมัครไม่สำเร็จ ❌")
+  }
+}
+
+</script>
+
+</body>
+</html>

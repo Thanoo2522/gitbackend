@@ -1,0 +1,6 @@
+Flask
+gunicorn
+requests
+Pillow
+firebase-admin
+werkzeug
