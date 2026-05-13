@@ -4,6 +4,8 @@ import os
 import json
 import traceback
 import requests
+import threading
+import time
 
 import firebase_admin
 
@@ -31,11 +33,13 @@ SERVER_ID = os.environ.get(
 )
 
 if not HUB_FIREBASE_SERVICE_KEY:
+
     raise RuntimeError(
         "Missing HUB_FIREBASE_SERVICE_KEY"
     )
 
 if not SERVER_ID:
+
     raise RuntimeError(
         "Missing SERVER_ID"
     )
@@ -48,14 +52,18 @@ hub_cred = credentials.Certificate(
 )
 
 hub_app = firebase_admin.initialize_app(
+
     hub_cred,
+
     name="hub"
 )
 
 # =========================================================
 # HUB FIRESTORE
 # =========================================================
-hub_db = firestore.client(hub_app)
+hub_db = firestore.client(
+    hub_app
+)
 
 # =========================================================
 # CACHE
@@ -69,6 +77,9 @@ def get_tenant_app():
 
     global tenant_apps
 
+    # =====================================================
+    # CACHE
+    # =====================================================
     if SERVER_ID in tenant_apps:
 
         return tenant_apps[SERVER_ID]
@@ -77,6 +88,7 @@ def get_tenant_app():
     # READ CONFIG
     # =====================================================
     doc_ref = (
+
         hub_db.collection("hub_system")
               .document("server_pool")
               .collection("servers")
@@ -94,7 +106,7 @@ def get_tenant_app():
     data = doc.to_dict()
 
     # =====================================================
-    # GET CONFIG
+    # CONFIG
     # =====================================================
     firebase_key = data.get(
         "FIREBASE_SERVICE_KEY"
@@ -109,30 +121,99 @@ def get_tenant_app():
     )
 
     # =====================================================
-    # INIT TENANT FIREBASE
+    # FIREBASE CERT
     # =====================================================
     cred = credentials.Certificate(
-        firebase_key
+        json.loads(firebase_key)
     )
 
-    tenant_app = firebase_admin.initialize_app(
+    # =====================================================
+    # INIT APP
+    # =====================================================
+    try:
 
-        cred,
+        tenant_app = firebase_admin.get_app(
+            SERVER_ID
+        )
 
-        {
-            "databaseURL":
-                rtdb_url,
+    except ValueError:
 
-            "storageBucket":
-                bucket_name
-        },
+        tenant_app = firebase_admin.initialize_app(
 
-        name=SERVER_ID
-    )
+            cred,
+
+            {
+                "databaseURL":
+                    rtdb_url,
+
+                "storageBucket":
+                    bucket_name
+            },
+
+            name=SERVER_ID
+        )
 
     tenant_apps[SERVER_ID] = tenant_app
 
     return tenant_app
+
+# =========================================================
+# UPDATE HEARTBEAT
+# =========================================================
+def update_heartbeat():
+
+    while True:
+
+        try:
+
+            hub_db.collection("hub_system") \
+                  .document("server_pool") \
+                  .collection("servers") \
+                  .document(SERVER_ID) \
+                  .set({
+
+                      "server_id":
+                          SERVER_ID,
+
+                      "status":
+                          "online",
+
+                      "health":
+                          "good",
+
+                      "last_ping":
+                          firestore.SERVER_TIMESTAMP,
+
+                      "cloud_url":
+                          os.environ.get(
+                              "WORKER_WEBHOOK_URL"
+                          ),
+
+                      "load_score":
+                          0
+
+                  }, merge=True)
+
+            print(
+                f"[{SERVER_ID}] heartbeat updated"
+            )
+
+        except Exception as e:
+
+            print("heartbeat error")
+            print(str(e))
+
+        time.sleep(30)
+
+# =========================================================
+# START HEARTBEAT THREAD
+# =========================================================
+heartbeat_thread = threading.Thread(
+    target=update_heartbeat,
+    daemon=True
+)
+
+heartbeat_thread.start()
 
 # =========================================================
 # HOME
@@ -140,7 +221,7 @@ def get_tenant_app():
 @app.route("/")
 def home():
 
-    return "WORKER RUNNING"
+    return f"WORKER RUNNING : {SERVER_ID}"
 
 # =========================================================
 # WORKER WEBHOOK
@@ -151,7 +232,7 @@ def worker_webhook():
     try:
 
         # =================================================
-        # GET BODY
+        # BODY
         # =================================================
         body = request.get_json()
 
@@ -161,9 +242,9 @@ def worker_webhook():
             ensure_ascii=False
         ))
 
-        # ===============================================
-        # LOAD TENANT FIREBASE
-        # =============================================
+        # =================================================
+        # LOAD FIREBASE
+        # =================================================
         tenant_app = get_tenant_app()
 
         tenant_db = firestore.client(
@@ -171,9 +252,10 @@ def worker_webhook():
         )
 
         # =================================================
-        # READ CONFIG AGAIN
+        # READ CONFIG
         # =================================================
         doc_ref = (
+
             hub_db.collection("hub_system")
                   .document("server_pool")
                   .collection("servers")
@@ -189,7 +271,7 @@ def worker_webhook():
         )
 
         # =================================================
-        # WRITE FIRESTORE
+        # WRITE LOG
         # =================================================
         tenant_db.collection("logs") \
                  .add({
@@ -205,7 +287,7 @@ def worker_webhook():
                  })
 
         # =================================================
-        # LINE REPLY
+        # LINE EVENT
         # =================================================
         line_body = body.get(
             "line_body", {}
@@ -215,6 +297,9 @@ def worker_webhook():
             "events", []
         )
 
+        # =================================================
+        # REPLY
+        # =================================================
         if events:
 
             reply_token = events[0].get(
@@ -238,6 +323,7 @@ def worker_webhook():
                 "messages": [
                     {
                         "type": "text",
+
                         "text":
                             f"WORKER : {SERVER_ID}"
                     }
@@ -278,6 +364,7 @@ def worker_webhook():
 
             "message":
                 str(e)
+
         }), 500
 
 # =========================================================
@@ -297,11 +384,14 @@ def test_write():
         tenant_db.collection("device_logs") \
                  .add({
 
-                     "temperature": 32.5,
+                     "temperature":
+                        32.5,
 
-                     "humidity": 70,
+                     "humidity":
+                        70,
 
-                     "device": "ESP32",
+                     "device":
+                        "ESP32",
 
                      "created_at":
                         firestore.SERVER_TIMESTAMP
@@ -324,7 +414,23 @@ def test_write():
 
             "message":
                 str(e)
+
         }), 500
+
+# =========================================================
+# HEALTH
+# =========================================================
+@app.route("/health")
+def health():
+
+    return jsonify({
+
+        "status":
+            "online",
+
+        "server_id":
+            SERVER_ID
+    })
 
 # =========================================================
 # RUN
@@ -332,9 +438,12 @@ def test_write():
 if __name__ == "__main__":
 
     app.run(
+
         host="0.0.0.0",
+
         port=int(
             os.environ.get("PORT", 8080)
         ),
+
         debug=True
     )
