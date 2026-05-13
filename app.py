@@ -223,6 +223,20 @@ def home():
 
     return f"WORKER RUNNING : {SERVER_ID}"
 
+#------------------------------------------
+@app.route("/debug-firebase")
+def debug_firebase():
+
+    tenant_app = get_tenant_app()
+
+    return jsonify({
+
+        "project_id":
+            tenant_app.project_id,
+
+        "options":
+            tenant_app.options
+    })
 # =========================================================
 # WORKER WEBHOOK
 # =========================================================
