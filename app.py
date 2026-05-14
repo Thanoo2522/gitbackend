@@ -159,9 +159,6 @@ def update_heartbeat():
 
         time.sleep(30)
 
-# =========================================================
-# START HEARTBEAT
-# =========================================================
 heartbeat_thread = threading.Thread(
 
     target=update_heartbeat,
@@ -172,15 +169,7 @@ heartbeat_thread = threading.Thread(
 heartbeat_thread.start()
 
 # =========================================================
-# HOME
-# =========================================================
-@app.route("/")
-def home():
-
-    return f"WORKER : {SERVER_ID}"
-
-# =========================================================
-# DOWNLOAD LINE IMAGE
+# DOWNLOAD IMAGE
 # =========================================================
 def download_line_image(message_id):
 
@@ -199,15 +188,13 @@ def download_line_image(message_id):
 
         url,
 
-        headers=headers,
-
-        stream=True
+        headers=headers
     )
 
     if response.status_code != 200:
 
         raise Exception(
-            f"LINE DOWNLOAD ERROR {response.text}"
+            response.text
         )
 
     return response.content
@@ -231,6 +218,60 @@ def upload_image(image_bytes, filename):
     blob.make_public()
 
     return blob.public_url
+
+# =========================================================
+# REPLY LINE
+# =========================================================
+def reply_line(reply_token, text):
+
+    url = (
+        "https://api.line.me/v2/bot/message/reply"
+    )
+
+    headers = {
+
+        "Authorization":
+            f"Bearer {LINE_CHANNEL_ACCESS_TOKEN}",
+
+        "Content-Type":
+            "application/json"
+    }
+
+    payload = {
+
+        "replyToken":
+            reply_token,
+
+        "messages": [
+
+            {
+                "type":
+                    "text",
+
+                "text":
+                    text
+            }
+        ]
+    }
+
+    response = requests.post(
+
+        url,
+
+        headers=headers,
+
+        json=payload
+    )
+
+    print(response.text)
+
+# =========================================================
+# HOME
+# =========================================================
+@app.route("/")
+def home():
+
+    return f"WORKER : {SERVER_ID}"
 
 # =========================================================
 # WORKER WEBHOOK
@@ -265,6 +306,10 @@ def worker_webhook():
         saved_count = 0
 
         for event in events:
+
+            reply_token = event.get(
+                "replyToken"
+            )
 
             source = event.get(
                 "source",
@@ -306,8 +351,6 @@ def worker_webhook():
             # =============================================
             elif message_type == "image":
 
-                print("DOWNLOAD IMAGE...")
-
                 image_bytes = download_line_image(
                     message_id
                 )
@@ -321,8 +364,6 @@ def worker_webhook():
                     image_bytes,
                     filename
                 )
-
-                print("IMAGE URL =", image_url)
 
             # =============================================
             # SAVE FIRESTORE
@@ -348,14 +389,36 @@ def worker_webhook():
                          "image_url":
                              image_url,
 
-                         "raw_event":
-                             event,
-
                          "created_at":
                              firestore.SERVER_TIMESTAMP
                      })
 
             saved_count += 1
+
+            # =============================================
+            # REPLY LINE
+            # =============================================
+            if reply_token:
+
+                if image_url:
+
+                    reply_text = (
+                        "บันทึกสำเร็จ\n\n"
+                        f"{image_url}"
+                    )
+
+                else:
+
+                    reply_text = (
+                        "บันทึกข้อความสำเร็จ"
+                    )
+
+                reply_line(
+
+                    reply_token,
+
+                    reply_text
+                )
 
         return jsonify({
 
@@ -363,10 +426,7 @@ def worker_webhook():
                 "success",
 
             "saved_count":
-                saved_count,
-
-            "server_id":
-                SERVER_ID
+                saved_count
         })
 
     except Exception as e:
