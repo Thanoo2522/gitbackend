@@ -5,12 +5,14 @@ import json
 import traceback
 import threading
 import time
+import requests
 
 import firebase_admin
 
 from firebase_admin import (
     credentials,
-    firestore
+    firestore,
+    storage
 )
 
 # =========================================================
@@ -37,25 +39,31 @@ WORKER_WEBHOOK_URL = os.environ.get(
     "WORKER_WEBHOOK_URL"
 )
 
+LINE_CHANNEL_ACCESS_TOKEN = os.environ.get(
+    "LINE_CHANNEL_ACCESS_TOKEN"
+)
+
+BUCKET_NAME = os.environ.get(
+    "BUCKET_NAME"
+)
+
 # =========================================================
 # CHECK ENV
 # =========================================================
-if not HUB_FIREBASE_KEY:
+required_envs = [
+
+    HUB_FIREBASE_KEY,
+    WORKER_FIREBASE_KEY,
+    SERVER_ID,
+    WORKER_WEBHOOK_URL,
+    LINE_CHANNEL_ACCESS_TOKEN,
+    BUCKET_NAME
+]
+
+if not all(required_envs):
 
     raise RuntimeError(
-        "Missing HUB_FIREBASE_KEY"
-    )
-
-if not WORKER_FIREBASE_KEY:
-
-    raise RuntimeError(
-        "Missing WORKER_FIREBASE_KEY"
-    )
-
-if not SERVER_ID:
-
-    raise RuntimeError(
-        "Missing SERVER_ID"
+        "Missing ENV"
     )
 
 # =========================================================
@@ -83,6 +91,11 @@ worker_app = firebase_admin.initialize_app(
 
     worker_cred,
 
+    {
+        "storageBucket":
+            BUCKET_NAME
+    },
+
     name="worker"
 )
 
@@ -95,6 +108,10 @@ hub_db = firestore.client(
 
 worker_db = firestore.client(
     worker_app
+)
+
+bucket = storage.bucket(
+    app=worker_app
 )
 
 # =========================================================
@@ -163,6 +180,59 @@ def home():
     return f"WORKER : {SERVER_ID}"
 
 # =========================================================
+# DOWNLOAD LINE IMAGE
+# =========================================================
+def download_line_image(message_id):
+
+    url = (
+        "https://api-data.line.me/v2/bot/message/"
+        f"{message_id}/content"
+    )
+
+    headers = {
+
+        "Authorization":
+            f"Bearer {LINE_CHANNEL_ACCESS_TOKEN}"
+    }
+
+    response = requests.get(
+
+        url,
+
+        headers=headers,
+
+        stream=True
+    )
+
+    if response.status_code != 200:
+
+        raise Exception(
+            f"LINE DOWNLOAD ERROR {response.text}"
+        )
+
+    return response.content
+
+# =========================================================
+# UPLOAD IMAGE
+# =========================================================
+def upload_image(image_bytes, filename):
+
+    blob = bucket.blob(
+        f"line_images/{filename}"
+    )
+
+    blob.upload_from_string(
+
+        image_bytes,
+
+        content_type="image/jpeg"
+    )
+
+    blob.make_public()
+
+    return blob.public_url
+
+# =========================================================
 # WORKER WEBHOOK
 # =========================================================
 @app.route("/worker-webhook", methods=["POST"])
@@ -187,75 +257,113 @@ def worker_webhook():
             {}
         )
 
-        temperature = payload.get(
-            "temperature"
+        events = payload.get(
+            "events",
+            []
         )
 
-        humidity = payload.get(
-            "humidity"
-        )
+        saved_count = 0
 
-        # =================================================
-        # VALIDATE
-        # =================================================
-        if temperature is None:
+        for event in events:
 
-            return jsonify({
+            source = event.get(
+                "source",
+                {}
+            )
 
-                "status":
-                    "error",
+            user_id = source.get(
+                "userId"
+            )
 
-                "message":
-                    "missing temperature"
+            message = event.get(
+                "message",
+                {}
+            )
 
-            }), 400
+            message_type = message.get(
+                "type"
+            )
 
-        # =================================================
-        # SAVE CURRENT DEVICE
-        # =================================================
-        worker_db.collection("devices") \
-                 .document("esp32_001") \
-                 .set({
+            message_id = message.get(
+                "id"
+            )
 
-                     "temperature":
-                         temperature,
+            text = None
 
-                     "humidity":
-                         humidity,
+            image_url = None
 
-                     "updated_at":
-                         firestore.SERVER_TIMESTAMP
+            # =============================================
+            # TEXT
+            # =============================================
+            if message_type == "text":
 
-                 }, merge=True)
+                text = message.get(
+                    "text"
+                )
 
-        # =================================================
-        # SAVE LOG
-        # =================================================
-        worker_db.collection("device_logs") \
-                 .add({
+            # =============================================
+            # IMAGE
+            # =============================================
+            elif message_type == "image":
 
-                     "request_id":
-                         request_id,
+                print("DOWNLOAD IMAGE...")
 
-                     "payload":
-                         payload,
+                image_bytes = download_line_image(
+                    message_id
+                )
 
-                     "server_id":
-                         SERVER_ID,
+                filename = (
+                    f"{request_id}_{message_id}.jpg"
+                )
 
-                     "created_at":
-                         firestore.SERVER_TIMESTAMP
-                 })
+                image_url = upload_image(
 
-        print("SAVE FIRESTORE SUCCESS")
+                    image_bytes,
+                    filename
+                )
 
-        # =================================================
-        # RETURN
-        # =================================================
+                print("IMAGE URL =", image_url)
+
+            # =============================================
+            # SAVE FIRESTORE
+            # =============================================
+            worker_db.collection("line_messages") \
+                     .add({
+
+                         "request_id":
+                             request_id,
+
+                         "server_id":
+                             SERVER_ID,
+
+                         "user_id":
+                             user_id,
+
+                         "message_type":
+                             message_type,
+
+                         "text":
+                             text,
+
+                         "image_url":
+                             image_url,
+
+                         "raw_event":
+                             event,
+
+                         "created_at":
+                             firestore.SERVER_TIMESTAMP
+                     })
+
+            saved_count += 1
+
         return jsonify({
 
             "status":
                 "success",
+
+            "saved_count":
+                saved_count,
 
             "server_id":
                 SERVER_ID
