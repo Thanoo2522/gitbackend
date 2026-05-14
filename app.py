@@ -21,8 +21,12 @@ app = Flask(__name__)
 # =========================================================
 # ENV
 # =========================================================
-FIREBASE_SERVICE_KEY = os.environ.get(
-    "FIREBASE_SERVICE_KEY"
+HUB_FIREBASE_KEY = os.environ.get(
+    "HUB_FIREBASE_KEY"
+)
+
+WORKER_FIREBASE_KEY = os.environ.get(
+    "WORKER_FIREBASE_KEY"
 )
 
 SERVER_ID = os.environ.get(
@@ -33,10 +37,19 @@ WORKER_WEBHOOK_URL = os.environ.get(
     "WORKER_WEBHOOK_URL"
 )
 
-if not FIREBASE_SERVICE_KEY:
+# =========================================================
+# CHECK ENV
+# =========================================================
+if not HUB_FIREBASE_KEY:
 
     raise RuntimeError(
-        "Missing FIREBASE_SERVICE_KEY"
+        "Missing HUB_FIREBASE_KEY"
+    )
+
+if not WORKER_FIREBASE_KEY:
+
+    raise RuntimeError(
+        "Missing WORKER_FIREBASE_KEY"
     )
 
 if not SERVER_ID:
@@ -46,55 +59,78 @@ if not SERVER_ID:
     )
 
 # =========================================================
-# FIREBASE INIT
+# INIT HUB FIREBASE
 # =========================================================
-cred = credentials.Certificate(
-    json.loads(FIREBASE_SERVICE_KEY)
+hub_cred = credentials.Certificate(
+    json.loads(HUB_FIREBASE_KEY)
 )
 
-firebase_admin.initialize_app(
-    cred
+hub_app = firebase_admin.initialize_app(
+
+    hub_cred,
+
+    name="hub"
+)
+
+# =========================================================
+# INIT WORKER FIREBASE
+# =========================================================
+worker_cred = credentials.Certificate(
+    json.loads(WORKER_FIREBASE_KEY)
+)
+
+worker_app = firebase_admin.initialize_app(
+
+    worker_cred,
+
+    name="worker"
 )
 
 # =========================================================
 # FIRESTORE
 # =========================================================
-db = firestore.client()
+hub_db = firestore.client(
+    hub_app
+)
+
+worker_db = firestore.client(
+    worker_app
+)
 
 # =========================================================
 # HEARTBEAT
-# ===================================================
+# =========================================================
 def update_heartbeat():
 
     while True:
 
         try:
 
-            db.collection("hub_system") \
-              .document("server_pool") \
-              .collection("servers") \
-              .document(SERVER_ID) \
-              .set({
+            hub_db.collection("hub_system") \
+                  .document("server_pool") \
+                  .collection("servers") \
+                  .document(SERVER_ID) \
+                  .set({
 
-                  "server_id":
-                      SERVER_ID,
+                      "server_id":
+                          SERVER_ID,
 
-                  "status":
-                      "online",
+                      "status":
+                          "online",
 
-                  "health":
-                      "good",
+                      "health":
+                          "good",
 
-                  "cloud_url":
-                      WORKER_WEBHOOK_URL,
+                      "cloud_url":
+                          WORKER_WEBHOOK_URL,
 
-                  "load_score":
-                      0,
+                      "load_score":
+                          0,
 
-                  "last_ping":
-                      firestore.SERVER_TIMESTAMP
+                      "last_ping":
+                          firestore.SERVER_TIMESTAMP
 
-              }, merge=True)
+                  }, merge=True)
 
             print(
                 f"[{SERVER_ID}] heartbeat updated"
@@ -107,7 +143,7 @@ def update_heartbeat():
         time.sleep(30)
 
 # =========================================================
-# START THREAD
+# START HEARTBEAT
 # =========================================================
 heartbeat_thread = threading.Thread(
 
@@ -151,42 +187,67 @@ def worker_webhook():
             {}
         )
 
+        temperature = payload.get(
+            "temperature"
+        )
+
+        humidity = payload.get(
+            "humidity"
+        )
+
+        # =================================================
+        # VALIDATE
+        # =================================================
+        if temperature is None:
+
+            return jsonify({
+
+                "status":
+                    "error",
+
+                "message":
+                    "missing temperature"
+
+            }), 400
+
         # =================================================
         # SAVE CURRENT DEVICE
         # =================================================
-        db.collection("devices") \
-          .document("esp32_001") \
-          .set({
+        worker_db.collection("devices") \
+                 .document("esp32_001") \
+                 .set({
 
-              "temperature":
-                  payload.get("temperature"),
+                     "temperature":
+                         temperature,
 
-              "humidity":
-                  payload.get("humidity"),
+                     "humidity":
+                         humidity,
 
-              "updated_at":
-                  firestore.SERVER_TIMESTAMP
+                     "updated_at":
+                         firestore.SERVER_TIMESTAMP
 
-          }, merge=True)
+                 }, merge=True)
 
         # =================================================
-        # SAVE LOG HISTORY
+        # SAVE LOG
         # =================================================
-        db.collection("device_logs") \
-          .add({
+        worker_db.collection("device_logs") \
+                 .add({
 
-              "request_id":
-                  request_id,
+                     "request_id":
+                         request_id,
 
-              "payload":
-                  payload,
+                     "payload":
+                         payload,
 
-              "server_id":
-                  SERVER_ID,
+                     "server_id":
+                         SERVER_ID,
 
-              "created_at":
-                  firestore.SERVER_TIMESTAMP
-          })
+                     "created_at":
+                         firestore.SERVER_TIMESTAMP
+                 })
+
+        print("SAVE FIRESTORE SUCCESS")
 
         # =================================================
         # RETURN
