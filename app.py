@@ -65,45 +65,61 @@ worker_db = firestore.client(worker_app)
 # =========================================================
 # HEARTBEAT
 # =========================================================
+# =========================================================
+# HEARTBEAT
+# =========================================================
 def update_heartbeat():
 
     while True:
 
         try:
 
+            data = {
+
+                "server_id":
+                    SERVER_ID,
+
+                "status":
+                    "online",
+
+                "cloud_url":
+                    WORKER_WEBHOOK_URL,
+
+                "load_score":
+                    0,
+
+                "last_ping":
+                    firestore.SERVER_TIMESTAMP
+            }
+
+            print(
+                "HEARTBEAT DATA =",
+                data
+            )
+
             hub_db.collection("hub_system") \
                   .document("server_pool") \
                   .collection("servers") \
                   .document(SERVER_ID) \
-                  .set({
+                  .set(
+                      data,
+                      merge=True
+                  )
 
-                      "server_id":
-                          SERVER_ID,
-
-                      "status":
-                          "online",
-
-                      "cloud_url":
-                          WORKER_WEBHOOK_URL,
-
-                      "load_score":
-                          0,
-
-                      "last_ping":
-                          firestore.SERVER_TIMESTAMP
-
-                  }, merge=True)
+            print(
+                "HEARTBEAT UPDATED"
+            )
 
         except Exception as e:
 
-            print(str(e))
+            print(
+                "HEARTBEAT ERROR =",
+                str(e)
+            )
+
+            traceback.print_exc()
 
         time.sleep(30)
-
-threading.Thread(
-    target=update_heartbeat,
-    daemon=True
-).start()
 
 # =========================================================
 # CHECK REGISTER
