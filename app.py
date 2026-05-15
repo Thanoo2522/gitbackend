@@ -39,7 +39,7 @@ WORKER_WEBHOOK_URL = os.environ.get(
 
 # =========================================================
 # FIREBASE
-# =========================================================
+# ======================================================
 hub_cred = credentials.Certificate(
     json.loads(HUB_FIREBASE_KEY)
 )
