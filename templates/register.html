@@ -50,7 +50,7 @@
 const LIFF_ID = "{{ LIFF_ID }}"
 const OFM = "{{ OFM }}"
 
-const API_URL = "https://gitbackend-416424538655.asia-southeast3.run.app/register"
+const BASE_URL = "https://gitbackend-416424538655.asia-southeast3.run.app"
 
 async function init() {
 
@@ -86,17 +86,17 @@ async function registerUser() {
 
       phone: document.getElementById("phone").value
     }
+    
+const res = await fetch(`${BASE_URL}/register`, {
 
-    const res = await fetch(API_URL, {
+  method: "POST",
 
-      method: "POST",
+  headers: {
+    "Content-Type": "application/json"
+  },
 
-      headers: {
-        "Content-Type": "application/json"
-      },
-
-      body: JSON.stringify(data)
-    })
+  body: JSON.stringify(data)
+})
 
     const json = await res.json()
 
