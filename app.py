@@ -30,8 +30,7 @@ WORKER_FIREBASE_KEY = os.environ.get(
 )
 
 SERVER_ID = os.environ.get(
-    "SERVER_ID",
-    "worker1"
+    "SERVER_ID"
 )
 
 WORKER_WEBHOOK_URL = os.environ.get(
