@@ -108,7 +108,6 @@ def worker_webhook():
         print(json.dumps(body, indent=2, ensure_ascii=False))
         print("=" * 50)
 
-        # ตัวอย่าง: รับ event จาก HUB หรือ LINE forward
         user_id = body.get("userId")
 
         if not user_id:
@@ -117,15 +116,48 @@ def worker_webhook():
                 "message": "no userId"
             })
 
-        # ตรวจว่าลงทะเบียนหรือยัง
+        # =================================================
+        # CHECK REGISTER
+        # =================================================
         doc = db.collection("users").document(user_id).get()
 
+        # =================================================
+        # NOT REGISTERED → SEND LINK BACK TO LINE OA
+        # =================================================
         if not doc.exists:
+
+            # 🔥 เปิดหน้า register.html ผ่าน LIFF
+            register_link = (
+                f"https://liff.line.me/{LIFF_ID}"
+                f"?userId={user_id}"
+            )
+
+            # =================================================
+            # ส่งกลับแบบ LINE FRIENDLY (button clickable)
+            # =================================================
             return jsonify({
-                "status": "not_registered"
+                "status": "not_registered",
+                "register_link": register_link,
+                "line_message": {
+                    "type": "template",
+                    "altText": "กรุณาลงทะเบียน",
+                    "template": {
+                        "type": "buttons",
+                        "text": "กรุณาลงทะเบียนก่อนใช้งาน",
+                        "actions": [
+                            {
+                                "type": "uri",
+                                "label": "👉 สมัครสมาชิก",
+                                "uri": register_link
+                            }
+                        ]
+                    }
+                }
             })
 
-        # ถ้าลงทะเบียนแล้ว → ทำงานต่อได้
+        # =================================================
+        # REGISTERED → NORMAL FLOW
+        # =================================================
         return jsonify({
             "status": "ok",
             "message": "user ready",
