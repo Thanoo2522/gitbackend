@@ -10,6 +10,7 @@ from flask import (
     render_template
 )
 
+
 import firebase_admin
 
 from firebase_admin import (
@@ -24,6 +25,8 @@ from firebase_admin import (
 
 app = Flask(__name__)
 
+
+
 # =========================================================
 # CONFIG
 # =========================================================
@@ -31,7 +34,10 @@ app = Flask(__name__)
 BUCKET_NAME = "basework-51f3b.firebasestorage.app"
 
 WORKER_FIREBASE_KEY = os.environ.get("WORKER_FIREBASE_KEY")
-WORKER_WEBHOOK_URL = os.environ.get("WORKER_WEBHOOK_URL")
+
+WORKER_WEBHOOK_URL = os.environ.get(
+    "WORKER_WEBHOOK_URL"
+)
 
 LINE_CHANNEL_ACCESS_TOKEN = os.environ.get(
     "LINE_CHANNEL_ACCESS_TOKEN"
@@ -67,17 +73,23 @@ firebase_admin.initialize_app(
 )
 
 db = firestore.client()
+
 bucket = storage.bucket()
 
 # =========================================================
 # LINE API
 # =========================================================
 
-LINE_REPLY_API = "https://api.line.me/v2/bot/message/reply"
+LINE_REPLY_API = (
+    "https://api.line.me/v2/bot/message/reply"
+)
 
 LINE_HEADERS = {
-    "Authorization": f"Bearer {LINE_CHANNEL_ACCESS_TOKEN}",
-    "Content-Type": "application/json"
+    "Authorization":
+        f"Bearer {LINE_CHANNEL_ACCESS_TOKEN}",
+
+    "Content-Type":
+        "application/json"
 }
 
 # =========================================================
@@ -87,7 +99,7 @@ LINE_HEADERS = {
 @app.route("/register-page")
 def register_page():
 
-    ofm = request.args.get("ofm", "")
+    ofm = request.args.get("ofm", "user")
 
     return render_template(
         "register.html",
@@ -95,7 +107,7 @@ def register_page():
         OFM=ofm
     )
 
-# ========================================================
+# =========================================================
 # REGISTER API
 # =========================================================
 
@@ -104,27 +116,65 @@ def register():
 
     try:
 
+        print("=" * 50)
         print("REGISTER API CALLED")
+        print("=" * 50)
 
         body = request.get_json()
 
-        print("BODY =", body)
+        print(json.dumps(
+            body,
+            indent=2,
+            ensure_ascii=False
+        ))
+
+        if not body:
+
+            return jsonify({
+                "status": "error",
+                "message": "body is empty"
+            }), 400
 
         user_id = body.get("userId")
 
-        print("USER_ID =", user_id)
+        if not user_id:
+
+            return jsonify({
+                "status": "error",
+                "message": "missing userId"
+            }), 400
 
         data = {
-            "name": body.get("name", ""),
-            "home": body.get("home", ""),
-            "address": body.get("address", ""),
-            "phone": body.get("phone", ""),
-            "ofm": body.get("ofm", ""),
-            "register_status": True,
-            "created_at": firestore.SERVER_TIMESTAMP
+
+            "name":
+                body.get("name", "").strip(),
+
+            "home":
+                body.get("home", "").strip(),
+
+            "address":
+                body.get("address", "").strip(),
+
+            "phone":
+                body.get("phone", "").strip(),
+
+            "ofm":
+                body.get("ofm", "").strip(),
+
+            "register_status":
+                True,
+
+            "created_at":
+                firestore.SERVER_TIMESTAMP
         }
 
-        print("SAVE DATA =", data)
+        print("SAVE DATA:")
+        print(json.dumps(
+            data,
+            indent=2,
+            ensure_ascii=False,
+            default=str
+        ))
 
         db.collection("user").document(user_id).set(
             data,
@@ -139,7 +189,9 @@ def register():
 
     except Exception as e:
 
+        print("=" * 50)
         print("REGISTER ERROR")
+        print("=" * 50)
 
         traceback.print_exc()
 
@@ -182,7 +234,9 @@ def webhook():
             # CHECK USER REGISTER
             # =================================================
 
-            doc_ref = db.collection("user").document(user_id)
+            doc_ref = db.collection("user").document(
+                user_id
+            )
 
             doc = doc_ref.get()
 
@@ -193,28 +247,34 @@ def webhook():
             if not doc.exists:
 
                 register_url = (
-                    f"{WORKER_WEBHOOK_URL}/register-page"
-                    "?ofm=user"
+                    f"{WORKER_WEBHOOK_URL}"
+                    f"/register-page?ofm=user"
                 )
 
                 payload = {
                     "replyToken": reply_token,
+
                     "messages": [
                         {
                             "type": "text",
-                            "text": (
+
+                            "text":
                                 "กรุณาลงทะเบียนก่อนใช้งาน\n"
                                 f"{register_url}"
-                            )
                         }
                     ]
                 }
 
-                requests.post(
+                response = requests.post(
                     LINE_REPLY_API,
                     headers=LINE_HEADERS,
                     json=payload
                 )
+
+                print("LINE REPLY STATUS:",
+                      response.status_code)
+
+                print(response.text)
 
                 continue
 
@@ -225,22 +285,30 @@ def webhook():
             user_data = doc.to_dict()
 
             payload = {
+
                 "replyToken": reply_token,
+
                 "messages": [
                     {
                         "type": "text",
-                        "text": (
-                            f"สวัสดี {user_data.get('name', '')}"
-                        )
+
+                        "text":
+                            f"สวัสดี "
+                            f"{user_data.get('name', '')}"
                     }
                 ]
             }
 
-            requests.post(
+            response = requests.post(
                 LINE_REPLY_API,
                 headers=LINE_HEADERS,
                 json=payload
             )
+
+            print("LINE REPLY STATUS:",
+                  response.status_code)
+
+            print(response.text)
 
         return "OK"
 
@@ -258,6 +326,7 @@ def webhook():
 # =========================================================
 
 if __name__ == "__main__":
+
     app.run(
         host="0.0.0.0",
         port=8080,

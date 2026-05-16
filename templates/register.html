@@ -2,12 +2,15 @@
 <html>
 
 <head>
+
   <meta charset="UTF-8">
+
   <title>สมัครสมาชิก</title>
 
   <script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
 
   <style>
+
     body {
       font-family: Arial;
       max-width: 400px;
@@ -29,7 +32,9 @@
       border: none;
       border-radius: 8px;
     }
+
   </style>
+
 </head>
 
 <body>
@@ -37,8 +42,11 @@
 <h2>สมัครสมาชิก</h2>
 
 <input id="name" placeholder="ชื่อ">
+
 <input id="home" placeholder="หมู่บ้าน">
+
 <input id="address" placeholder="ที่อยู่">
+
 <input id="phone" placeholder="เบอร์โทร">
 
 <button onclick="registerUser()">
@@ -48,57 +56,100 @@
 <script>
 
 const LIFF_ID = "{{ LIFF_ID }}"
+
 const OFM = "{{ OFM }}"
 
-const BASE_URL = "https://gitbackend-416424538655.asia-southeast3.run.app"
+const BASE_URL =
+  "https://gitbackend-416424538655.asia-southeast3.run.app"
+
+// =====================================================
+// INIT
+// =====================================================
 
 async function init() {
 
-  await liff.init({
-    liffId: LIFF_ID
-  })
+  try {
 
-  if (!liff.isLoggedIn()) {
-    liff.login()
-    return
+    console.log("INIT LIFF")
+
+    await liff.init({
+      liffId: LIFF_ID
+    })
+
+    console.log("LIFF READY")
+
+    if (!liff.isLoggedIn()) {
+
+      liff.login()
+
+      return
+    }
+
+  } catch (err) {
+
+    console.error("LIFF INIT ERROR:", err)
+
+    alert("LIFF INIT ERROR")
   }
 }
 
 init()
 
+// =====================================================
+// REGISTER
+// =====================================================
+
 async function registerUser() {
 
   try {
 
+    console.log("START REGISTER")
+
     const profile = await liff.getProfile()
+
+    console.log("PROFILE:", profile)
 
     const data = {
 
-      userId: profile.userId,
+      userId:
+        profile.userId,
 
-      ofm: OFM,
+      ofm:
+        OFM,
 
-      name: document.getElementById("name").value,
+      name:
+        document.getElementById("name").value,
 
-      home: document.getElementById("home").value,
+      home:
+        document.getElementById("home").value,
 
-      address: document.getElementById("address").value,
+      address:
+        document.getElementById("address").value,
 
-      phone: document.getElementById("phone").value
+      phone:
+        document.getElementById("phone").value
     }
-    
-const res = await fetch(`${BASE_URL}/register`, {
 
-  method: "POST",
+    console.log("SEND:", data)
 
-  headers: {
-    "Content-Type": "application/json"
-  },
+    const res = await fetch(
+      `${BASE_URL}/register`,
+      {
+        method: "POST",
 
-  body: JSON.stringify(data)
-})
+        headers: {
+          "Content-Type": "application/json"
+        },
+
+        body: JSON.stringify(data)
+      }
+    )
+
+    console.log("STATUS:", res.status)
 
     const json = await res.json()
+
+    console.log("RESULT:", json)
 
     if (json.status === "ok") {
 
@@ -108,12 +159,12 @@ const res = await fetch(`${BASE_URL}/register`, {
 
     } else {
 
-      alert("สมัครไม่สำเร็จ")
+      alert(json.message || "สมัครไม่สำเร็จ")
     }
 
   } catch (err) {
 
-    console.error(err)
+    console.error("REGISTER ERROR:", err)
 
     alert("เกิดข้อผิดพลาด")
   }
