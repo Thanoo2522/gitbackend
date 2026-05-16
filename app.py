@@ -246,10 +246,8 @@ def webhook():
 
             if not doc.exists:
 
-                register_url = (
-                    f"{WORKER_WEBHOOK_URL}"
-                    f"/register-page?ofm=user"
-                )
+                register_url = ( f"https://liff.line.me/{LIFF_ID}""?ofm=user"
+                                )
 
                 payload = {
                     "replyToken": reply_token,
