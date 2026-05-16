@@ -104,21 +104,15 @@ def register():
 
     try:
 
+        print("REGISTER API CALLED")
+
         body = request.get_json()
 
-        print(json.dumps(
-            body,
-            indent=2,
-            ensure_ascii=False
-        ))
+        print("BODY =", body)
 
         user_id = body.get("userId")
 
-        if not user_id:
-            return jsonify({
-                "status": "error",
-                "message": "missing userId"
-            }), 400
+        print("USER_ID =", user_id)
 
         data = {
             "name": body.get("name", ""),
@@ -130,16 +124,22 @@ def register():
             "created_at": firestore.SERVER_TIMESTAMP
         }
 
+        print("SAVE DATA =", data)
+
         db.collection("user").document(user_id).set(
             data,
             merge=True
         )
+
+        print("SAVE SUCCESS")
 
         return jsonify({
             "status": "ok"
         })
 
     except Exception as e:
+
+        print("REGISTER ERROR")
 
         traceback.print_exc()
 
