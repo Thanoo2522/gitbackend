@@ -8,7 +8,7 @@ from firebase_admin import credentials, storage, firestore
 
 app = Flask(__name__)
 
-# ------------------------------------
+# -----------------------------------
 # Configuration & Environment Variables
 # ------------------------------------
 RTD_URL1 = "https://firebasedatabase.app"
