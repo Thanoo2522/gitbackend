@@ -1,187 +1,139 @@
-from flask import Flask, request, jsonify, render_template
-import os, json, traceback
+import os
+import json
+import requests
+from flask import Flask, request, jsonify
 import firebase_admin
 from firebase_admin import credentials, firestore
 
-# =========================================================
-# FLASK
-# =========================================================
 app = Flask(__name__)
 
-# =========================================================
-# ENV
-# =========================================================
-WORKER_FIREBASE_KEY = os.environ.get("WORKER_FIREBASE_KEY")
-LIFF_ID = os.environ.get("LIFF_ID")
+# 📌 เริ่มต้นเชื่อมต่อฐานข้อมูล Firebase 
+if not firebase_admin._apps:
+    firebase_admin.initialize_app()
+db = firestore.client()
 
-if not WORKER_FIREBASE_KEY:
-    raise RuntimeError("Missing WORKER_FIREBASE_KEY")
+# 📌 กำหนดค่าตัวแปรกลางตามที่คุณให้มา
+LIFF_URL = "https://liff.line.me/2010064672-zx1EQTMH"
+CHANNEL_ACCESS_TOKEN = "WFrlScHP1ovaJI4au3oJS6X61jmv1BmeG+HoBs0bD8FRLnbNxk1/OgWCSf+MzM3BYrfPA9og9AA5jqHTj0iQ1z5N/qEWFlrHA7BpJS/9/+Sb7MP6XX+QssXcRMAEdysVLM+NWsxdhuaVrueRLLJElwdB04t89/1O/w1cDnyilFU="  # 👈 นำ Token ของคุณมาใส่ตรงนี้
+DEFAULT_OFM = "default_shop"
 
-if not LIFF_ID:
-    raise RuntimeError("Missing LIFF_ID")
-
-# =========================================================
-# FIREBASE INIT
-# =========================================================
-worker_app = firebase_admin.initialize_app(
-    credentials.Certificate(json.loads(WORKER_FIREBASE_KEY)),
-    name="worker"
-)
-
-db = firestore.client(worker_app)
-
-# =========================================================
-# HEALTH CHECK
-# =========================================================
-@app.route("/")
-def home():
-    return jsonify({"status": "worker online"})
-
-
-# =========================================================
-# CONFIG (ให้ frontend ดึง API URL)
-# =========================================================
-@app.route("/config/<ofm>")
-def config(ofm):
-    return jsonify({
-        "status": "ok",
-        "ofm": ofm,
-        "apiUrl": "https://YOUR_CLOUD_RUN_URL/register"
-    })
-
-
-# =========================================================
-# CHECK USER
-# =========================================================
-@app.route("/check-user", methods=["POST"])
-def check_user():
-    try:
-        body = request.get_json()
-        user_id = body.get("userId")
-
-        if not user_id:
-            return jsonify({"registered": False})
-
-        doc = db.collection("users").document(user_id).get()
-
-        return jsonify({"registered": doc.exists})
-
-    except Exception as e:
-        traceback.print_exc()
-        return jsonify({"registered": False, "error": str(e)})
-
-
-# =========================================================
-# REGISTER USER
-# =========================================================
-@app.route("/register", methods=["POST"])
-def register():
-    try:
-        body = request.get_json()
-
-        user_id = body.get("userId")
-        if not user_id:
-            return jsonify({"status": "error", "message": "missing userId"})
-
-        db.collection("users").document(user_id).set({
-            "name": body.get("name"),
-            "home": body.get("home"),
-            "address": body.get("address"),
-            "phone": body.get("phone"),
-            "ofm": body.get("ofm"),
-            "created_at": firestore.SERVER_TIMESTAMP
-        })
-
-        return jsonify({"status": "ok"})
-
-    except Exception as e:
-        traceback.print_exc()
-        return jsonify({"status": "error", "message": str(e)})
-
-
-# =========================================================
-# LINE OA WEBHOOK (MAIN FLOW FIXED)
-# =========================================================
+# ==========================================
+# 🛑 ROUTE 1: WORKER WEBHOOK (ตัวตรวจเช็คสิทธิ์)
+# ==========================================
 @app.route("/worker-webhook", methods=["POST"])
 def worker_webhook():
-
     try:
-        body = request.get_json()
+        body = request.get_data()
+        body_json = json.loads(body)
+        events = body_json.get("events", [])
 
-        print("=" * 50)
-        print("LINE WEBHOOK")
-        print(json.dumps(body, indent=2, ensure_ascii=False))
-        print("=" * 50)
+        for event in events:
+            user_id = event["source"].get("userId")
+            reply_token = event.get("replyToken")
+            
+            if not user_id or not reply_token:
+                continue
 
-        events = body.get("events", [])
-        if not events:
-            return jsonify({"status": "no events"})
+            # 🔍 ตรวจสอบเอกสารข้อมูลสมาชิกที่เส้นทาง users/{userID}
+            user_ref = db.collection("users").document(user_id)
+            user_doc = user_ref.get()
 
-        event = events[0]
-        source = event.get("source", {})
-        user_id = source.get("userId")
+            # ❌ กรณีไม่มีข้อมูลในฐานข้อมูล -> ส่งลิงก์บังคับสมัครสมาชิกทันที
+            if not user_doc.exists:
+                print(f"🛑 ไม่พบรหัสผู้ใช้: {user_id} ในระบบ กำลังส่งลิงก์สมัครสมาชิก...")
+                
+                headers = {
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {CHANNEL_ACCESS_TOKEN}"
+                }
+                
+                # แนบตัวแปรไปกับลิงก์ LIFF เพื่อให้หน้าเว็บนำไปประมวลผลต่อ
+                registration_link = f"{LIFF_URL}?ofm={DEFAULT_OFM}"
 
-        if not user_id:
-            return jsonify({"status": "no userId"})
-
-        # =================================================
-        # CHECK USER IN FIRESTORE
-        # =================================================
-        doc = db.collection("users").document(user_id).get()
-
-        # =================================================
-        # NOT REGISTERED → SEND LIFF LINK
-        # =================================================
-        if not doc.exists:
-
-            register_link = (
-                f"https://liff.line.me/{LIFF_ID}"
-                f"?ofm=default&userId={user_id}"
-            )
-
-            return jsonify({
-                "status": "not_registered",
-                "line_message": {
-                    "type": "template",
-                    "altText": "กรุณาลงทะเบียน",
-                    "template": {
-                        "type": "buttons",
-                        "text": "กรุณาลงทะเบียนก่อนใช้งานระบบ",
-                        "actions": [
+                # ส่งการแจ้งเตือนกลับเป็นรูปปุ่มกด Flex Message
+                requests.post(
+                    "https://line.me",
+                    headers=headers,
+                    json={
+                        "replyToken": reply_token,
+                        "messages": [
                             {
-                                "type": "uri",
-                                "label": "สมัครสมาชิก",
-                                "uri": register_link
+                                "type": "flex",
+                                "altText": "กรุณาลงทะเบียนสมาชิกก่อนใช้งานค่ะ",
+                                "contents": {
+                                    "type": "bubble",
+                                    "body": {
+                                        "type": "box",
+                                        "layout": "vertical",
+                                        "contents": [
+                                            {"type": "text", "text": "🔒 ตรวจพบผู้ใช้งานใหม่", "weight": "bold", "size": "xl", "color": "#ff3333"},
+                                            {"type": "text", "text": "คุณยังไม่ได้ลงทะเบียนสิทธิ์ใช้งาน กรุณากดปุ่มด้านล่างเพื่อยืนยันตัวตนก่อนนะคะ", "margin": "md", "wrap": True}
+                                        ]
+                                    },
+                                    "footer": {
+                                        "type": "box",
+                                        "layout": "vertical",
+                                        "contents": [
+                                            {
+                                                "type": "button",
+                                                "style": "primary",
+                                                "color": "#06c755",
+                                                "action": {
+                                                    "type": "uri",
+                                                    "label": "สมัครสมาชิกคลิกที่นี่",
+                                                    "uri": registration_link
+                                                }
+                                            }
+                                        ]
+                                    }
+                                }
                             }
                         ]
                     }
-                }
-            })
+                )
+                continue  # บล็อกคำสั่งถัดไปเพื่อรอบังคับสมัครสมาชิกให้เสร็จก่อนเท่านั้น
 
-        # =================================================
-        # REGISTERED USER
-        # =================================================
-        return jsonify({
-            "status": "ok",
-            "message": "user ready",
-            "user": doc.to_dict()
-        })
+            # ====== ผ่านด่านลงทะเบียนแล้ว -> รันระบบตอบกลับปกติของคุณต่อจากตรงนี้ ======
+            print(f"✅ บัญชี {user_id} ได้รับอนุญาตให้ใช้งานระบบแล้ว")
 
+        return "OK", 200
     except Exception as e:
-        traceback.print_exc()
-        return jsonify({"status": "error", "message": str(e)})
+        print("💥 Error:", str(e))
+        return "Internal Error", 500
 
+# ==========================================
+# 💾 ROUTE 2: REGISTER API (ตัวบันทึกตอนสมัครเสร็จ)
+# ==========================================
+@app.route("/api/register-submit", methods=["POST"])
+def register_submit():
+    try:
+        data = request.get_json()
+        user_id = data.get("userId")
+        
+        if not user_id:
+            return jsonify({"status": "fail", "message": "Missing userId"}), 400
 
-# =========================================================
-# REGISTER PAGE (LIFF ENTRY)
-# =========================================================
-@app.route("/register-page")
-def register_page():
-    return render_template("register.html")
+        # เขียนชุดบันทึกข้อมูลเข้าสู่ฐานข้อมูล Firestore ที่ users/{userID} โดยตรง
+        db.collection("users").document(user_id).set({
+            "ofm": data.get("ofm"),
+            "name": data.get("name"),
+            "home": data.get("home"),
+            "address": data.get("address"),
+            "phone": data.get("phone"),
+            "registered_at": firestore.SERVER_TIMESTAMP
+        })
+        
+        return jsonify({"status": "ok"}), 200
+    except Exception as e:
+        return jsonify({"status": "fail", "message": str(e)}), 500
 
+# API ตัวอย่างเพื่อจำลองส่ง Config ให้หน้า LIFF
+@app.route("/config/<ofm_name>", methods=["GET"])
+def get_config(ofm_name):
+    return jsonify({
+        "status": "ok",
+        "apiUrl": "https://run.app"
+    })
 
-# =========================================================
-# RUN
-# =========================================================
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=8080)
+    app.run(port=5000, debug=True)

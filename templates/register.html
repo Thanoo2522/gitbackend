@@ -3,41 +3,15 @@
 <head>
   <meta charset="UTF-8">
   <title>สมัครสมาชิก</title>
-
   <script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
-
   <style>
-    body {
-      font-family: Arial;
-      max-width: 400px;
-      margin: auto;
-      padding: 20px;
-    }
-
-    h2 {
-      text-align: center;
-      font-size: 20px;
-    }
-
-    input {
-      width: 100%;
-      padding: 10px;
-      margin: 6px 0;
-      font-size: 14px;
-    }
-
-    button {
-      width: 100%;
-      padding: 12px;
-      font-size: 16px;
-      background: #06c755;
-      color: white;
-      border: none;
-      border-radius: 8px;
-    }
+    body { font-family: Arial, sans-serif; max-width: 400px; margin: auto; padding: 20px; }
+    h2 { text-align: center; font-size: 20px; color: #333; }
+    input { width: 100%; padding: 12px; margin: 6px 0; font-size: 14px; border: 1px solid #ddd; border-radius: 6px; box-sizing: border-box; }
+    button { width: 100%; padding: 12px; font-size: 16px; background: #06c755; color: white; border: none; border-radius: 8px; font-weight: bold; cursor: pointer; }
+    button:hover { background: #05b14b; }
   </style>
 </head>
-
 <body>
 
 <h2>สมัครสมาชิก</h2>
@@ -50,97 +24,83 @@
 <button onclick="register()">สมัคร</button>
 
 <script>
-
 let API_URL = ""
-let LIFF_ID = ""
+const LIFF_ID = "2010064672-zx1EQTMH"
 let OFM = ""
-
-// 🔥 เปลี่ยนเป็น URL Cloud Run ของคุณ
 const BASE_URL = "https://gitbackend-416424538655.asia-southeast3.run.app"
 
-// ================= GET OFM =================
-function getOfmFromUrl() {
-  const urlParams = new URLSearchParams(window.location.search)
-  let ofm = urlParams.get("ofm")
-
-  // 🔥 fallback กรณี LIFF redirect แล้ว query หาย
-  if (!ofm) {
-    const context = liff.getContext()
-    if (context && context.referrer && context.referrer.extra) {
-      ofm = context.referrer.extra.ofm
-    }
-  }
-
-  return ofm
+// ฟังก์ชันแกะดึงข้อมูล Query Parameter ที่เสถียรที่สุด
+function extractQueryParam(name, url = window.location.href) {
+  name = name.replace(/[\[\]]/g, '\\$&');
+  const regex = new RegExp('[?&]' + name + '(=([^&#]*)|&|#|$)');
+  const results = regex.exec(url);
+  if (!results) return null;
+  if (!results[2]) return '';
+  return decodeURIComponent(results[2].replace(/\+/g, ' '));
 }
 
-// ================= INIT =================
+// ================= INITIALIZE SYSTEM =================
 async function initApp() {
   try {
-    // 1. ต้อง init LIFF ก่อนเสมอ เพื่อให้ liff.getContext() ทำงานได้
-    await liff.init({ liffId: "2010064672-zx1EQTMH" }) // ใส่ ID ไปตรงๆ ก่อนเพื่อเริ่มระบบ
+    // 1. โหลดระบบ LIFF
+    await liff.init({ liffId: LIFF_ID })
 
     if (!liff.isLoggedIn()) {
       liff.login()
       return
     }
 
-    // 2. ดึงค่า ofm จาก URL หรือจาก Context ของ LIFF
-    const urlParams = new URLSearchParams(window.location.search)
-    OFM = urlParams.get("ofm")
-
-    // ถ้าใน URL ไม่มี (เพราะโดน Redirect) ให้หาใน Context
+    // 2. ตรวจค้นค่าร้านค้า (ofm) จาก URL หลัก หรือจาก state หลังจาก redirect กลับมา
+    OFM = extractQueryParam("ofm")
     if (!OFM) {
-      const context = liff.getContext()
-      // ถ้าส่งผ่าน liff.line.me/xxx?ofm=... ค่าจะอยู่ในเครื่องหมาย ?
-      // หรือคุณอาจต้องใช้ liff.state เพื่อดึงค่ากลับมา
+      const state = extractQueryParam("state")
+      if (state) {
+        OFM = extractQueryParam("ofm", "?" + decodeURIComponent(state))
+      }
     }
 
     if (!OFM) {
-      alert("❌ ไม่พบชื่อร้าน (ofm)")
+      alert("❌ ไม่พบข้อมูลรหัสร้านค้า (ofm) กรุณาปิดหน้าเว็บและเข้าสู่ระบบผ่านลิงก์ปุ่มกดในไลน์อีกครั้งค่ะ")
       return
     }
 
-    console.log("OFM Found:", OFM)
+    console.log("🎯 Linked with Shop:", OFM)
 
-    // 3. เมื่อได้ OFM แล้วค่อยไปดึง Config
-    const encodedOFM = encodeURIComponent(OFM)
-    const res = await fetch(`${BASE_URL}/config/${encodedOFM}`)
+    // 3. เรียกดึงที่อยู่ลิงก์สำหรับส่งรับข้อมูลลงทะเบียน
+    const res = await fetch(`${BASE_URL}/config/${encodeURIComponent(OFM)}`)
     const config = await res.json()
 
     if (config.status === "ok") {
       API_URL = config.apiUrl.trim()
-      console.log("✅ Ready to Register")
+      console.log("✅ ระบบหน้าบ้านพร้อมสมัครแล้ว")
     } else {
-      alert("❌ ไม่พบข้อมูลร้านในระบบ")
+      alert("❌ ไม่พบข้อมูลร้านนี้ในฐานข้อมูล")
     }
 
   } catch (err) {
-    console.error("INIT ERROR:", err)
-    alert("เกิดข้อผิดพลาดในการโหลดข้อมูล")
+    console.error("💥 INIT ERROR:", err)
+    alert("ระบบเกิดข้อผิดพลาดในการดึงข้อมูลเริ่มต้น")
   }
 }
 
-
 initApp()
 
-// ================= REGISTER =================
+// ================= SUBMIT DATA =================
 async function register() {
   try {
-
     const profile = await liff.getProfile()
 
-    const name = document.getElementById("name").value
-    const home = document.getElementById("home").value
-    const address = document.getElementById("address").value
-    const phone = document.getElementById("phone").value
+    const name = document.getElementById("name").value.trim()
+    const home = document.getElementById("home").value.trim()
+    const address = document.getElementById("address").value.trim()
+    const phone = document.getElementById("phone").value.trim()
 
     if (!name || !home || !address || !phone) {
-      alert("กรุณากรอกข้อมูลให้ครบ")
+      alert("กรุณากรอกข้อมูลให้ครบถ้วนทุกช่อง")
       return
     }
 
-    const data = {
+    const payload = {
       ofm: OFM,
       userId: profile.userId,
       name: name,
@@ -149,33 +109,28 @@ async function register() {
       phone: phone
     }
 
-    console.log("SEND:", data)
+    console.log("⚡ กำลังส่งข้อมูลยืนยัน:", payload)
 
     const res = await fetch(API_URL, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify(data)
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
     })
 
     const json = await res.json()
 
-    console.log("RESULT:", json)
-
     if (json.status === "ok") {
-      alert("สมัครสำเร็จ ✅")
+      alert("สมัครสมาชิกสำเร็จเรียบร้อยแล้วค่ะ ✅")
       liff.closeWindow()
     } else {
-      alert("สมัครไม่สำเร็จ ❌")
+      alert("สมัครไม่สำเร็จ: " + (json.message || "เซิร์ฟเวอร์ปฏิเสธการเซฟข้อมูล"))
     }
 
   } catch (err) {
-    console.error("REGISTER ERROR:", err)
-    alert("สมัครไม่สำเร็จ ❌")
+    console.error("💥 REGISTER ERROR:", err)
+    alert("การยืนยันระบบสมัครสมาชิกล้มเหลว")
   }
 }
-
 </script>
 
 </body>
