@@ -28,7 +28,7 @@ app = Flask(__name__)
 # CONFIG
 # =========================================================
 
-BUCKET_NAME = "gs://basework-51f3b.firebasestorage.app"
+BUCKET_NAME = "basework-51f3b.firebasestorage.app"
 
 WORKER_FIREBASE_KEY = os.environ.get("WORKER_FIREBASE_KEY")
 WORKER_WEBHOOK_URL = os.environ.get("WORKER_WEBHOOK_URL")
