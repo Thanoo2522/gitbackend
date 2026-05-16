@@ -216,7 +216,94 @@ def check_register():
             "message":
                 str(e)
         })
+# =========================================================
+# REGISTER PAGE
+# =========================================================
+@app.route(
+    "/register-page",
+    methods=["GET"]
+)
+def register_page():
 
+    try:
+
+        print("=" * 60)
+        print("REGISTER PAGE")
+        print("=" * 60)
+
+        worker_id = request.args.get(
+            "worker"
+        )
+
+        print(
+            "WORKER ID =",
+            worker_id
+        )
+
+        return f"""
+        <!DOCTYPE html>
+        <html>
+
+        <head>
+
+            <title>Register</title>
+
+            <meta charset="utf-8">
+
+        </head>
+
+        <body>
+
+            <h1>
+                Register Page
+            </h1>
+
+            <p>
+                Worker:
+                {worker_id}
+            </p>
+
+            <form
+                action="/register"
+                method="post"
+            >
+
+                <input
+                    type="text"
+                    name="name"
+                    placeholder="Name"
+                >
+
+                <br><br>
+
+                <button type="submit">
+
+                    Register
+
+                </button>
+
+            </form>
+
+        </body>
+
+        </html>
+        """
+
+    except Exception as e:
+
+        traceback.print_exc()
+
+        return f"""
+
+        <h1>
+            ERROR
+        </h1>
+
+        <pre>
+            {str(e)}
+        </pre>
+
+        """, 500
 # =========================================================
 # REGISTER
 # =========================================================
