@@ -12,9 +12,13 @@ app = Flask(__name__)
 # ENV
 # =========================================================
 WORKER_FIREBASE_KEY = os.environ.get("WORKER_FIREBASE_KEY")
+LIFF_ID = os.environ.get("LIFF_ID")
 
 if not WORKER_FIREBASE_KEY:
     raise RuntimeError("Missing WORKER_FIREBASE_KEY")
+
+if not LIFF_ID:
+    raise RuntimeError("Missing LIFF_ID")
 
 # =========================================================
 # FIREBASE INIT
@@ -31,16 +35,26 @@ db = firestore.client(worker_app)
 # =========================================================
 @app.route("/")
 def home():
-    return jsonify({
-        "status": "worker online"
-    })
+    return jsonify({"status": "worker online"})
+
 
 # =========================================================
-# CHECK USER REGISTERED
+# CONFIG (ให้ frontend ดึง API URL)
+# =========================================================
+@app.route("/config/<ofm>")
+def config(ofm):
+    return jsonify({
+        "status": "ok",
+        "ofm": ofm,
+        "apiUrl": "https://YOUR_CLOUD_RUN_URL/register"
+    })
+
+
+# =========================================================
+# CHECK USER
 # =========================================================
 @app.route("/check-user", methods=["POST"])
 def check_user():
-
     try:
         body = request.get_json()
         user_id = body.get("userId")
@@ -50,38 +64,31 @@ def check_user():
 
         doc = db.collection("users").document(user_id).get()
 
-        return jsonify({
-            "registered": doc.exists
-        })
+        return jsonify({"registered": doc.exists})
 
     except Exception as e:
         traceback.print_exc()
-        return jsonify({
-            "registered": False,
-            "error": str(e)
-        })
+        return jsonify({"registered": False, "error": str(e)})
+
 
 # =========================================================
 # REGISTER USER
 # =========================================================
 @app.route("/register", methods=["POST"])
 def register():
-
     try:
         body = request.get_json()
-        user_id = body.get("userId")
 
+        user_id = body.get("userId")
         if not user_id:
-            return jsonify({
-                "status": "error",
-                "message": "missing userId"
-            })
+            return jsonify({"status": "error", "message": "missing userId"})
 
         db.collection("users").document(user_id).set({
             "name": body.get("name"),
             "home": body.get("home"),
             "address": body.get("address"),
             "phone": body.get("phone"),
+            "ofm": body.get("ofm"),
             "created_at": firestore.SERVER_TIMESTAMP
         })
 
@@ -89,13 +96,11 @@ def register():
 
     except Exception as e:
         traceback.print_exc()
-        return jsonify({
-            "status": "error",
-            "message": str(e)
-        })
+        return jsonify({"status": "error", "message": str(e)})
+
 
 # =========================================================
-# 🔥 MAIN WEBHOOK (REQUIRED ROUTE)
+# LINE OA WEBHOOK (MAIN FLOW FIXED)
 # =========================================================
 @app.route("/worker-webhook", methods=["POST"])
 def worker_webhook():
@@ -104,50 +109,48 @@ def worker_webhook():
         body = request.get_json()
 
         print("=" * 50)
-        print("WORKER WEBHOOK")
+        print("LINE WEBHOOK")
         print(json.dumps(body, indent=2, ensure_ascii=False))
         print("=" * 50)
 
-        user_id = body.get("userId")
+        events = body.get("events", [])
+        if not events:
+            return jsonify({"status": "no events"})
+
+        event = events[0]
+        source = event.get("source", {})
+        user_id = source.get("userId")
 
         if not user_id:
-            return jsonify({
-                "status": "error",
-                "message": "no userId"
-            })
+            return jsonify({"status": "no userId"})
 
         # =================================================
-        # CHECK REGISTER
+        # CHECK USER IN FIRESTORE
         # =================================================
         doc = db.collection("users").document(user_id).get()
 
         # =================================================
-        # NOT REGISTERED → SEND LINK BACK TO LINE OA
+        # NOT REGISTERED → SEND LIFF LINK
         # =================================================
         if not doc.exists:
 
-            # 🔥 เปิดหน้า register.html ผ่าน LIFF
             register_link = (
                 f"https://liff.line.me/{LIFF_ID}"
-                f"?userId={user_id}"
+                f"?ofm=default&userId={user_id}"
             )
 
-            # =================================================
-            # ส่งกลับแบบ LINE FRIENDLY (button clickable)
-            # =================================================
             return jsonify({
                 "status": "not_registered",
-                "register_link": register_link,
                 "line_message": {
                     "type": "template",
                     "altText": "กรุณาลงทะเบียน",
                     "template": {
                         "type": "buttons",
-                        "text": "กรุณาลงทะเบียนก่อนใช้งาน",
+                        "text": "กรุณาลงทะเบียนก่อนใช้งานระบบ",
                         "actions": [
                             {
                                 "type": "uri",
-                                "label": "👉 สมัครสมาชิก",
+                                "label": "สมัครสมาชิก",
                                 "uri": register_link
                             }
                         ]
@@ -156,7 +159,7 @@ def worker_webhook():
             })
 
         # =================================================
-        # REGISTERED → NORMAL FLOW
+        # REGISTERED USER
         # =================================================
         return jsonify({
             "status": "ok",
@@ -166,17 +169,16 @@ def worker_webhook():
 
     except Exception as e:
         traceback.print_exc()
-        return jsonify({
-            "status": "error",
-            "message": str(e)
-        })
+        return jsonify({"status": "error", "message": str(e)})
+
 
 # =========================================================
-# REGISTER PAGE (OPTIONAL LIFF)
+# REGISTER PAGE (LIFF ENTRY)
 # =========================================================
 @app.route("/register-page")
 def register_page():
     return render_template("register.html")
+
 
 # =========================================================
 # RUN
