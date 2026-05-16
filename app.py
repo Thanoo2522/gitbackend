@@ -31,6 +31,7 @@ app = Flask(__name__)
 BUCKET_NAME = "gs://basework-51f3b.firebasestorage.app"
 
 WORKER_FIREBASE_KEY = os.environ.get("WORKER_FIREBASE_KEY")
+WORKER_WEBHOOK_URL = os.environ.get("WORKER_WEBHOOK_URL")
 
 LINE_CHANNEL_ACCESS_TOKEN = os.environ.get(
     "LINE_CHANNEL_ACCESS_TOKEN"
@@ -46,6 +47,9 @@ if not LINE_CHANNEL_ACCESS_TOKEN:
 
 if not LIFF_ID:
     raise RuntimeError("Missing LIFF_ID")
+
+if not WORKER_WEBHOOK_URL:
+    raise RuntimeError("Missing WORKER_WEBHOOK_URL")
 
 # =========================================================
 # FIREBASE
@@ -189,8 +193,8 @@ def webhook():
             if not doc.exists:
 
                 register_url = (
-                    "https://YOUR_CLOUD_RUN_URL/register-page"
-                    "?ofm=testshop"
+                    f"{WORKER_WEBHOOK_URL}/register-page"
+                    "?ofm=user"
                 )
 
                 payload = {
