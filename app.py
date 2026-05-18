@@ -1,90 +1,71 @@
+from flask import Flask, request, jsonify
+
 import os
 import json
 import traceback
 import requests
+import time
 
-from flask import (
-    Flask,
-    request,
-    jsonify,
-    render_template
-)
-
+from datetime import datetime
 
 import firebase_admin
 
 from firebase_admin import (
     credentials,
-    firestore,
-    storage
+    firestore
 )
 
 # =========================================================
 # FLASK
 # =========================================================
-
 app = Flask(__name__)
 
-
-
 # =========================================================
-# CONFIG
+# ENV
 # =========================================================
-
-BUCKET_NAME = "basework-51f3b.firebasestorage.app"
-
-WORKER_FIREBASE_KEY = os.environ.get("WORKER_FIREBASE_KEY")
-
-WORKER_WEBHOOK_URL = os.environ.get(
-    "WORKER_WEBHOOK_URL"
+WORKER_FIREBASE_KEY = os.environ.get(
+    "WORKER_FIREBASE_KEY"
 )
 
 LINE_CHANNEL_ACCESS_TOKEN = os.environ.get(
     "LINE_CHANNEL_ACCESS_TOKEN"
 )
 
-LIFF_ID = os.environ.get("LIFF_ID")
+LIFF_ID = os.environ.get(
+    "LIFF_ID"
+)
 
-if not WORKER_FIREBASE_KEY:
-    raise RuntimeError("Missing WORKER_FIREBASE_KEY")
-
-if not LINE_CHANNEL_ACCESS_TOKEN:
-    raise RuntimeError("Missing LINE_CHANNEL_ACCESS_TOKEN")
-
-if not LIFF_ID:
-    raise RuntimeError("Missing LIFF_ID")
-
-if not WORKER_WEBHOOK_URL:
-    raise RuntimeError("Missing WORKER_WEBHOOK_URL")
+SERVER_ID = os.environ.get(
+    "SERVER_ID"
+)
 
 # =========================================================
 # FIREBASE
 # =========================================================
-
-cred = credentials.Certificate(
+worker_cred = credentials.Certificate(
     json.loads(WORKER_FIREBASE_KEY)
 )
 
-firebase_admin.initialize_app(
-    cred,
-    {
-        "storageBucket": BUCKET_NAME
-    }
+worker_app = firebase_admin.initialize_app(
+    worker_cred,
+    name="worker"
 )
 
-db = firestore.client()
-
-bucket = storage.bucket()
+worker_db = firestore.client(worker_app)
 
 # =========================================================
-# LINE API
+# LINE
 # =========================================================
-
 LINE_REPLY_API = (
     "https://api.line.me/v2/bot/message/reply"
 )
 
+LINE_PUSH_API = (
+    "https://api.line.me/v2/bot/message/push"
+)
+
 LINE_HEADERS = {
+
     "Authorization":
         f"Bearer {LINE_CHANNEL_ACCESS_TOKEN}",
 
@@ -93,243 +74,497 @@ LINE_HEADERS = {
 }
 
 # =========================================================
-# REGISTER PAGE
+# HOME
 # =========================================================
+@app.route("/")
+def home():
 
-@app.route("/register-page")
-def register_page():
-
-    ofm = request.args.get("ofm", "user")
-
-    return render_template(
-        "register.html",
-        LIFF_ID=LIFF_ID,
-        OFM=ofm
-    )
+    return f"{SERVER_ID} RUNNING"
 
 # =========================================================
-# REGISTER API
+# CHECK REGISTER
 # =========================================================
-
-@app.route("/register", methods=["POST"])
-def register():
+@app.route(
+    "/check-register",
+    methods=["POST"]
+)
+def check_register():
 
     try:
 
-        print("=" * 50)
-        print("REGISTER API CALLED")
-        print("=" * 50)
-
         body = request.get_json()
 
-        print(json.dumps(
-            body,
-            indent=2,
-            ensure_ascii=False
-        ))
-
-        if not body:
-
-            return jsonify({
-                "status": "error",
-                "message": "body is empty"
-            }), 400
-
-        user_id = body.get("userId")
+        user_id = body.get(
+            "user_id"
+        )
 
         if not user_id:
 
             return jsonify({
-                "status": "error",
-                "message": "missing userId"
-            }), 400
 
-        data = {
+                "registered":
+                    False
+            })
 
-            "name":
-                body.get("name", "").strip(),
-
-            "home":
-                body.get("home", "").strip(),
-
-            "address":
-                body.get("address", "").strip(),
-
-            "phone":
-                body.get("phone", "").strip(),
-
-            "ofm":
-                body.get("ofm", "").strip(),
-
-            "register_status":
-                True,
-
-            "created_at":
-                firestore.SERVER_TIMESTAMP
-        }
-
-        print("SAVE DATA:")
-        print(json.dumps(
-            data,
-            indent=2,
-            ensure_ascii=False,
-            default=str
-        ))
-
-        db.collection("user").document(user_id).set(
-            data,
-            merge=True
+        doc = (
+            worker_db
+            .collection("user")
+            .document(user_id)
+            .get()
         )
 
-        print("SAVE SUCCESS")
+        if not doc.exists:
+
+            return jsonify({
+
+                "registered":
+                    False
+            })
+
+        data = doc.to_dict()
+
+        register = data.get(
+            "register",
+            False
+        )
 
         return jsonify({
-            "status": "ok"
+
+            "registered":
+                register
         })
 
     except Exception as e:
 
-        print("=" * 50)
-        print("REGISTER ERROR")
-        print("=" * 50)
-
         traceback.print_exc()
 
         return jsonify({
-            "status": "error",
-            "message": str(e)
-        }), 500
+
+            "registered":
+                False,
+
+            "message":
+                str(e)
+        })
 
 # =========================================================
-# WEBHOOK
+# REPLY MESSAGE
 # =========================================================
+def reply_message(
+    reply_token,
+    text
+):
 
-@app.route("/webhook", methods=["POST"])
-def webhook():
+    payload = {
+
+        "replyToken":
+            reply_token,
+
+        "messages": [
+
+            {
+                "type":
+                    "text",
+
+                "text":
+                    text
+            }
+        ]
+    }
+
+    r = requests.post(
+
+        LINE_REPLY_API,
+
+        headers=LINE_HEADERS,
+
+        json=payload,
+
+        timeout=10
+    )
+
+    print(r.status_code)
+    print(r.text)
+
+# =========================================================
+# PUSH MESSAGE
+# =========================================================
+def push_message(
+    user_id,
+    text
+):
+
+    payload = {
+
+        "to":
+            user_id,
+
+        "messages": [
+
+            {
+                "type":
+                    "text",
+
+                "text":
+                    text
+            }
+        ]
+    }
+
+    r = requests.post(
+
+        LINE_PUSH_API,
+
+        headers=LINE_HEADERS,
+
+        json=payload,
+
+        timeout=10
+    )
+
+    print(r.status_code)
+    print(r.text)
+
+# =========================================================
+# WORKER WEBHOOK
+# =========================================================
+@app.route(
+    "/worker-webhook",
+    methods=["POST"]
+)
+def worker_webhook():
 
     try:
 
         body = request.get_json()
 
+        print("=" * 50)
+        print("WORKER WEBHOOK")
         print(json.dumps(
             body,
             indent=2,
             ensure_ascii=False
         ))
+        print("=" * 50)
 
-        events = body.get("events", [])
+        events = body.get(
+            "events",
+            []
+        )
 
         for event in events:
 
-            reply_token = event.get("replyToken")
+            event_type = event.get(
+                "type"
+            )
 
-            source = event.get("source", {})
+            reply_token = event.get(
+                "replyToken"
+            )
 
-            user_id = source.get("userId")
+            source = event.get(
+                "source",
+                {}
+            )
+
+            user_id = source.get(
+                "userId"
+            )
 
             if not user_id:
                 continue
 
-            # =================================================
-            # CHECK USER REGISTER
-            # =================================================
-
-            doc_ref = db.collection("user").document(
-                user_id
+            # =============================================
+            # GET USER
+            # =============================================
+            user_doc = (
+                worker_db
+                .collection("user")
+                .document(user_id)
+                .get()
             )
 
-            doc = doc_ref.get()
-
-            # =================================================
-            # USER NOT FOUND
-            # =================================================
-
-            if not doc.exists:
-
-                register_url = ( f"https://liff.line.me/{LIFF_ID}""?ofm=user"
-                                )
-
-                payload = {
-                    "replyToken": reply_token,
-
-                    "messages": [
-                        {
-                            "type": "text",
-
-                            "text":
-                                "กรุณาลงทะเบียนก่อนใช้งาน\n"
-                                f"{register_url}"
-                        }
-                    ]
-                }
-
-                response = requests.post(
-                    LINE_REPLY_API,
-                    headers=LINE_HEADERS,
-                    json=payload
-                )
-
-                print("LINE REPLY STATUS:",
-                      response.status_code)
-
-                print(response.text)
+            if not user_doc.exists:
 
                 continue
 
-            # =================================================
-            # USER REGISTERED
-            # =================================================
+            user_data = user_doc.to_dict()
 
-            user_data = doc.to_dict()
-
-            payload = {
-
-                "replyToken": reply_token,
-
-                "messages": [
-                    {
-                        "type": "text",
-
-                        "text":
-                            f"สวัสดี "
-                            f"{user_data.get('name', '')}"
-                    }
-                ]
-            }
-
-            response = requests.post(
-                LINE_REPLY_API,
-                headers=LINE_HEADERS,
-                json=payload
+            fullname = user_data.get(
+                "fullname",
+                "Unknown"
             )
 
-            print("LINE REPLY STATUS:",
-                  response.status_code)
+            # =============================================
+            # MESSAGE EVENT
+            # =============================================
+            if event_type == "message":
 
-            print(response.text)
+                message = event.get(
+                    "message",
+                    {}
+                )
 
-        return "OK"
+                message_type = message.get(
+                    "type"
+                )
+
+                # =========================================
+                # TEXT
+                # =========================================
+                if message_type == "text":
+
+                    text = message.get(
+                        "text",
+                        ""
+                    )
+
+                    # SAVE CHAT LOG
+                    worker_db.collection(
+                        "chat_logs"
+                    ).add({
+
+                        "user_id":
+                            user_id,
+
+                        "fullname":
+                            fullname,
+
+                        "text":
+                            text,
+
+                        "timestamp":
+                            datetime.utcnow()
+                    })
+
+                    # =====================================
+                    # COMMAND
+                    # =====================================
+                    if text == "ping":
+
+                        reply_message(
+
+                            reply_token,
+
+                            "pong"
+                        )
+
+                    elif text == "profile":
+
+                        profile_text = (
+
+                            f"ชื่อ: {fullname}\n"
+                            f"USER ID:\n{user_id}"
+                        )
+
+                        reply_message(
+
+                            reply_token,
+
+                            profile_text
+                        )
+
+                    else:
+
+                        reply_text = (
+
+                            f"สวัสดี {fullname}\n\n"
+                            f"ข้อความของคุณ:\n{text}"
+                        )
+
+                        reply_message(
+
+                            reply_token,
+
+                            reply_text
+                        )
+
+            # =============================================
+            # FOLLOW EVENT
+            # =============================================
+            elif event_type == "follow":
+
+                push_message(
+
+                    user_id,
+
+                    (
+                        "ยินดีต้อนรับ\n"
+                        "ระบบพร้อมใช้งานแล้ว"
+                    )
+                )
+
+        return jsonify({
+
+            "status":
+                "success"
+        })
 
     except Exception as e:
 
         traceback.print_exc()
 
         return jsonify({
-            "status": "error",
-            "message": str(e)
-        }), 500
-    #----------------------
-@app.route("/")
-def home():
-    return "SERVER OK"
-# =================================================== 
-# MAIN
-# =========================================================
 
+            "status":
+                "error",
+
+            "message":
+                str(e)
+        }), 500
+
+# =========================================================
+# REGISTER USER
+# =========================================================
+@app.route(
+    "/register-user",
+    methods=["POST"]
+)
+def register_user():
+
+    try:
+
+        body = request.get_json()
+
+        user_id = body.get(
+            "userId"
+        )
+
+        if not user_id:
+
+            return jsonify({
+
+                "status":
+                    "error",
+
+                "message":
+                    "no userId"
+            })
+
+        save_data = {
+
+            "userId":
+                user_id,
+
+            "displayName":
+                body.get("displayName"),
+
+            "pictureUrl":
+                body.get("pictureUrl"),
+
+            "fullname":
+                body.get("fullname"),
+
+            "phone":
+                body.get("phone"),
+
+            "worker":
+                body.get("worker"),
+
+            "register":
+                True,
+
+            "created_at":
+                datetime.utcnow()
+        }
+
+        (
+            worker_db
+            .collection("user")
+            .document(user_id)
+            .set(save_data)
+        )
+
+        return jsonify({
+
+            "status":
+                "success",
+
+            "message":
+                "ลงทะเบียนสำเร็จ"
+        })
+
+    except Exception as e:
+
+        traceback.print_exc()
+
+        return jsonify({
+
+            "status":
+                "error",
+
+            "message":
+                str(e)
+        }), 500
+
+# =========================================================
+# HEARTBEAT
+# =========================================================
+@app.route(
+    "/heartbeat",
+    methods=["POST"]
+)
+def heartbeat():
+
+    try:
+
+        body = request.get_json()
+
+        cpu = body.get("cpu", 0)
+        ram = body.get("ram", 0)
+
+        worker_db.collection(
+            "worker_status"
+        ).document(SERVER_ID).set({
+
+            "server_id":
+                SERVER_ID,
+
+            "status":
+                "online",
+
+            "cpu":
+                cpu,
+
+            "ram":
+                ram,
+
+            "last_heartbeat":
+                int(time.time())
+        })
+
+        return jsonify({
+
+            "status":
+                "success"
+        })
+
+    except Exception as e:
+
+        traceback.print_exc()
+
+        return jsonify({
+
+            "status":
+                "error",
+
+            "message":
+                str(e)
+        })
+
+# =========================================================
+# RUN
+# =========================================================
 if __name__ == "__main__":
 
     app.run(
+
         host="0.0.0.0",
-        port=8080,
-        debug=True
+
+        port=int(
+            os.environ.get(
+                "PORT",
+                8080
+            )
+        )
     )
