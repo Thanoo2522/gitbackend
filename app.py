@@ -170,26 +170,7 @@ def heartbeat_loop():
 # =========================================================
 # START HEARTBEAT THREAD
 # =========================================================
-@app.before_request
-def start_heartbeat():
-
-    global heartbeat_started
-
-    if not heartbeat_started:
-
-        heartbeat_started = True
-
-        threading.Thread(
-
-            target=heartbeat_loop,
-
-            daemon=True
-
-        ).start()
-
-        print("=" * 50)
-        print("HEARTBEAT THREAD STARTED")
-        print("=" * 50)
+ 
 
 # =========================================================
 # HOME
@@ -645,6 +626,18 @@ def register_user():
 # RUN
 # =========================================================
 if __name__ == "__main__":
+
+    print("=" * 50)
+    print("START HEARTBEAT THREAD")
+    print("=" * 50)
+
+    threading.Thread(
+
+        target=heartbeat_loop,
+
+        daemon=True
+
+    ).start()
 
     app.run(
 
