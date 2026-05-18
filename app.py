@@ -33,6 +33,10 @@ WORKER_FIREBASE_KEY = os.environ.get(
     "WORKER_FIREBASE_KEY"
 )
 
+HUB_FIREBASE_KEY = os.environ.get(
+    "HUB_FIREBASE_KEY"
+)
+
 LINE_CHANNEL_ACCESS_TOKEN = os.environ.get(
     "LINE_CHANNEL_ACCESS_TOKEN"
 )
@@ -50,7 +54,7 @@ WORKER_WEBHOOK_URL = os.environ.get(
 )
 
 # =========================================================
-# FIREBASE
+# WORKER FIREBASE
 # =========================================================
 worker_cred = credentials.Certificate(
     json.loads(WORKER_FIREBASE_KEY)
@@ -62,6 +66,20 @@ worker_app = firebase_admin.initialize_app(
 )
 
 worker_db = firestore.client(worker_app)
+
+# =========================================================
+# HUB FIREBASE
+# =========================================================
+hub_cred = credentials.Certificate(
+    json.loads(HUB_FIREBASE_KEY)
+)
+
+hub_app = firebase_admin.initialize_app(
+    hub_cred,
+    name="hub"
+)
+
+hub_db = firestore.client(hub_app)
 
 # =========================================================
 # LINE API
@@ -122,10 +140,10 @@ def heartbeat_loop():
                     int(time.time())
             }
 
-            print("START WRITE FIRESTORE")
+            print("START WRITE HUB FIRESTORE")
 
             (
-                worker_db
+                hub_db
                 .collection("hub_system")
                 .document("server_pool")
                 .collection("servers")
@@ -133,7 +151,7 @@ def heartbeat_loop():
                 .set(save_data, merge=True)
             )
 
-            print("FIRESTORE WRITE SUCCESS")
+            print("HUB FIRESTORE WRITE SUCCESS")
 
             print("=" * 50)
             print("HEARTBEAT SENT")
