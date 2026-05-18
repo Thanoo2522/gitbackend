@@ -22,6 +22,11 @@ from firebase_admin import (
 app = Flask(__name__)
 
 # =========================================================
+# HEARTBEAT STATE
+# =========================================================
+heartbeat_started = False
+
+# =========================================================
 # ENV
 # =========================================================
 WORKER_FIREBASE_KEY = os.environ.get(
@@ -79,14 +84,6 @@ LINE_HEADERS = {
 }
 
 # =========================================================
-# HOME
-# =========================================================
-@app.route("/")
-def home():
-
-    return f"{SERVER_ID} RUNNING"
-
-# =========================================================
 # HEARTBEAT LOOP
 # =========================================================
 def heartbeat_loop():
@@ -94,6 +91,12 @@ def heartbeat_loop():
     while True:
 
         try:
+
+            print("=" * 50)
+            print("HEARTBEAT LOOP")
+            print("SERVER_ID =", SERVER_ID)
+            print("WORKER_WEBHOOK_URL =", WORKER_WEBHOOK_URL)
+            print("=" * 50)
 
             save_data = {
 
@@ -119,6 +122,8 @@ def heartbeat_loop():
                     int(time.time())
             }
 
+            print("START WRITE FIRESTORE")
+
             (
                 worker_db
                 .collection("hub_system")
@@ -127,6 +132,8 @@ def heartbeat_loop():
                 .document(SERVER_ID)
                 .set(save_data, merge=True)
             )
+
+            print("FIRESTORE WRITE SUCCESS")
 
             print("=" * 50)
             print("HEARTBEAT SENT")
@@ -141,6 +148,38 @@ def heartbeat_loop():
             traceback.print_exc()
 
         time.sleep(30)
+
+# =========================================================
+# START HEARTBEAT THREAD
+# =========================================================
+@app.before_request
+def start_heartbeat():
+
+    global heartbeat_started
+
+    if not heartbeat_started:
+
+        heartbeat_started = True
+
+        threading.Thread(
+
+            target=heartbeat_loop,
+
+            daemon=True
+
+        ).start()
+
+        print("=" * 50)
+        print("HEARTBEAT THREAD STARTED")
+        print("=" * 50)
+
+# =========================================================
+# HOME
+# =========================================================
+@app.route("/")
+def home():
+
+    return f"{SERVER_ID} RUNNING"
 
 # =========================================================
 # CHECK REGISTER
@@ -588,14 +627,6 @@ def register_user():
 # RUN
 # =========================================================
 if __name__ == "__main__":
-
-    threading.Thread(
-
-        target=heartbeat_loop,
-
-        daemon=True
-
-    ).start()
 
     app.run(
 
