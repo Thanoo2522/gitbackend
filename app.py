@@ -5,6 +5,7 @@ import json
 import traceback
 import requests
 import time
+import threading
 
 from datetime import datetime
 
@@ -39,6 +40,10 @@ SERVER_ID = os.environ.get(
     "SERVER_ID"
 )
 
+WORKER_WEBHOOK_URL = os.environ.get(
+    "WORKER_WEBHOOK_URL"
+)
+
 # =========================================================
 # FIREBASE
 # =========================================================
@@ -54,7 +59,7 @@ worker_app = firebase_admin.initialize_app(
 worker_db = firestore.client(worker_app)
 
 # =========================================================
-# LINE
+# LINE API
 # =========================================================
 LINE_REPLY_API = (
     "https://api.line.me/v2/bot/message/reply"
@@ -82,6 +87,62 @@ def home():
     return f"{SERVER_ID} RUNNING"
 
 # =========================================================
+# HEARTBEAT LOOP
+# =========================================================
+def heartbeat_loop():
+
+    while True:
+
+        try:
+
+            save_data = {
+
+                "server_id":
+                    SERVER_ID,
+
+                "status":
+                    "online",
+
+                "cpu":
+                    10,
+
+                "ram":
+                    20,
+
+                "load_score":
+                    5,
+
+                "cloud_url":
+                    WORKER_WEBHOOK_URL,
+
+                "last_heartbeat":
+                    int(time.time())
+            }
+
+            (
+                worker_db
+                .collection("hub_system")
+                .document("server_pool")
+                .collection("servers")
+                .document(SERVER_ID)
+                .set(save_data, merge=True)
+            )
+
+            print("=" * 50)
+            print("HEARTBEAT SENT")
+            print(json.dumps(
+                save_data,
+                indent=2,
+                ensure_ascii=False
+            ))
+            print("=" * 50)
+
+        except Exception:
+            traceback.print_exc()
+
+        time.sleep(30)
+
+# =========================================================
 # CHECK REGISTER
 # =========================================================
 @app.route(
@@ -93,6 +154,11 @@ def check_register():
     try:
 
         body = request.get_json()
+
+        print("=" * 50)
+        print("CHECK REGISTER")
+        print(body)
+        print("=" * 50)
 
         user_id = body.get(
             "user_id"
@@ -123,7 +189,7 @@ def check_register():
 
         data = doc.to_dict()
 
-        register = data.get(
+        registered = data.get(
             "register",
             False
         )
@@ -131,7 +197,7 @@ def check_register():
         return jsonify({
 
             "registered":
-                register
+                registered
         })
 
     except Exception as e:
@@ -183,8 +249,11 @@ def reply_message(
         timeout=10
     )
 
+    print("=" * 50)
+    print("REPLY MESSAGE")
     print(r.status_code)
     print(r.text)
+    print("=" * 50)
 
 # =========================================================
 # PUSH MESSAGE
@@ -222,8 +291,11 @@ def push_message(
         timeout=10
     )
 
+    print("=" * 50)
+    print("PUSH MESSAGE")
     print(r.status_code)
     print(r.text)
+    print("=" * 50)
 
 # =========================================================
 # WORKER WEBHOOK
@@ -274,9 +346,9 @@ def worker_webhook():
             if not user_id:
                 continue
 
-            # =============================================
+            # =========================================
             # GET USER
-            # =============================================
+            # =========================================
             user_doc = (
                 worker_db
                 .collection("user")
@@ -285,6 +357,8 @@ def worker_webhook():
             )
 
             if not user_doc.exists:
+
+                print("USER NOT FOUND")
 
                 continue
 
@@ -295,9 +369,9 @@ def worker_webhook():
                 "Unknown"
             )
 
-            # =============================================
+            # =========================================
             # MESSAGE EVENT
-            # =============================================
+            # =========================================
             if event_type == "message":
 
                 message = event.get(
@@ -309,9 +383,9 @@ def worker_webhook():
                     "type"
                 )
 
-                # =========================================
-                # TEXT
-                # =========================================
+                # =====================================
+                # TEXT MESSAGE
+                # =====================================
                 if message_type == "text":
 
                     text = message.get(
@@ -319,7 +393,11 @@ def worker_webhook():
                         ""
                     )
 
+                    print("TEXT =", text)
+
+                    # =================================
                     # SAVE CHAT LOG
+                    # =================================
                     worker_db.collection(
                         "chat_logs"
                     ).add({
@@ -337,10 +415,10 @@ def worker_webhook():
                             datetime.utcnow()
                     })
 
-                    # =====================================
-                    # COMMAND
-                    # =====================================
-                    if text == "ping":
+                    # =================================
+                    # COMMANDS
+                    # =================================
+                    if text.lower() == "ping":
 
                         reply_message(
 
@@ -349,7 +427,7 @@ def worker_webhook():
                             "pong"
                         )
 
-                    elif text == "profile":
+                    elif text.lower() == "profile":
 
                         profile_text = (
 
@@ -379,9 +457,9 @@ def worker_webhook():
                             reply_text
                         )
 
-            # =============================================
+            # =========================================
             # FOLLOW EVENT
-            # =============================================
+            # =========================================
             elif event_type == "follow":
 
                 push_message(
@@ -425,6 +503,15 @@ def register_user():
     try:
 
         body = request.get_json()
+
+        print("=" * 50)
+        print("REGISTER USER")
+        print(json.dumps(
+            body,
+            indent=2,
+            ensure_ascii=False
+        ))
+        print("=" * 50)
 
         user_id = body.get(
             "userId"
@@ -498,64 +585,17 @@ def register_user():
         }), 500
 
 # =========================================================
-# HEARTBEAT
-# =========================================================
-@app.route(
-    "/heartbeat",
-    methods=["POST"]
-)
-def heartbeat():
-
-    try:
-
-        body = request.get_json()
-
-        cpu = body.get("cpu", 0)
-        ram = body.get("ram", 0)
-
-        worker_db.collection(
-            "worker_status"
-        ).document(SERVER_ID).set({
-
-            "server_id":
-                SERVER_ID,
-
-            "status":
-                "online",
-
-            "cpu":
-                cpu,
-
-            "ram":
-                ram,
-
-            "last_heartbeat":
-                int(time.time())
-        })
-
-        return jsonify({
-
-            "status":
-                "success"
-        })
-
-    except Exception as e:
-
-        traceback.print_exc()
-
-        return jsonify({
-
-            "status":
-                "error",
-
-            "message":
-                str(e)
-        })
-
-# =========================================================
 # RUN
 # =========================================================
 if __name__ == "__main__":
+
+    threading.Thread(
+
+        target=heartbeat_loop,
+
+        daemon=True
+
+    ).start()
 
     app.run(
 
