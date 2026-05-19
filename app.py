@@ -313,10 +313,25 @@ def register_user():
 # RUN
 # =========================================================
 if __name__ == "__main__":
-    start_heartbeat()
+
+ 
+
+    threading.Thread(
+
+        target=heartbeat_loop,
+
+        daemon=True
+
+    ).start()
 
     app.run(
+
         host="0.0.0.0",
-        port=int(os.environ.get("PORT", 8080)),
-        debug=True
+
+        port=int(
+            os.environ.get(
+                "PORT",
+                8080
+            )
+        )
     )
