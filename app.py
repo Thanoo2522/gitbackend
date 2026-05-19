@@ -72,26 +72,29 @@ LINE_HEADERS = {
 # =========================================================
 # HEARTBEAT LOOP (IMPROVED)
 # =========================================================
+# =========================================================
+# HEARTBEAT LOOP (NO PSUTIL)
+# =========================================================
 def heartbeat_loop():
+
     print("🔥 HEARTBEAT LOOP STARTED")
 
     while True:
-        try:
-            cpu = psutil.cpu_percent(interval=1)
-            ram = psutil.virtual_memory().percent
-            disk = psutil.disk_usage('/').percent
 
-            load_score = round((cpu + ram) / 2, 2)
+        try:
 
             save_data = {
+
                 "server_id": SERVER_ID,
+
                 "status": "online",
-                "cpu": cpu,
-                "ram": ram,
-                "disk": disk,
-                "load_score": load_score,
+
+                "load_score": 0,
+
                 "cloud_url": WORKER_WEBHOOK_URL,
+
                 "last_heartbeat": int(time.time())
+
             }
 
             hub_db.collection("hub_system") \
@@ -103,20 +106,30 @@ def heartbeat_loop():
             print("✅ HEARTBEAT OK")
 
         except Exception as e:
-            print("❌ HEARTBEAT ERROR:", e)
+
+            print("❌ HEARTBEAT ERROR:", str(e))
+
             traceback.print_exc()
 
         time.sleep(30)
 
 
+# =========================================================
+# START HEARTBEAT
+# =========================================================
 def start_heartbeat_once():
+
     global heartbeat_started
 
     if heartbeat_started:
         return
 
     heartbeat_started = True
-    threading.Thread(target=heartbeat_loop, daemon=True).start()
+
+    threading.Thread(
+        target=heartbeat_loop,
+        daemon=True
+    ).start()
 
     print("🚀 HEARTBEAT STARTED")
 
