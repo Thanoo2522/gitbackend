@@ -6,17 +6,12 @@ import traceback
 import requests
 import time
 import threading
-
 import psutil
- 
+
 from datetime import datetime
 
 import firebase_admin
-
-from firebase_admin import (
-    credentials,
-    firestore
-)
+from firebase_admin import credentials, firestore
 
 # =========================================================
 # FLASK
@@ -31,134 +26,85 @@ heartbeat_started = False
 # =========================================================
 # ENV
 # =========================================================
-WORKER_FIREBASE_KEY = os.environ.get(
-    "WORKER_FIREBASE_KEY"
-)
-
-HUB_FIREBASE_KEY = os.environ.get(
-    "HUB_FIREBASE_KEY"
-)
-
-LINE_CHANNEL_ACCESS_TOKEN = os.environ.get(
-    "LINE_CHANNEL_ACCESS_TOKEN"
-)
-
-LIFF_ID = os.environ.get(
-    "LIFF_ID"
-)
-
-SERVER_ID = os.environ.get(
-    "SERVER_ID"
-)
-
-WORKER_WEBHOOK_URL = os.environ.get(
-    "WORKER_WEBHOOK_URL"
-)
+WORKER_FIREBASE_KEY = os.environ.get("WORKER_FIREBASE_KEY")
+HUB_FIREBASE_KEY = os.environ.get("HUB_FIREBASE_KEY")
+LINE_CHANNEL_ACCESS_TOKEN = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN")
+LIFF_ID = os.environ.get("LIFF_ID")
+SERVER_ID = os.environ.get("SERVER_ID")
+WORKER_WEBHOOK_URL = os.environ.get("WORKER_WEBHOOK_URL")
 
 # =========================================================
-# WORKER FIREBASE
+# VALIDATION (กัน server พังเงียบ)
 # =========================================================
-worker_cred = credentials.Certificate(
-    json.loads(WORKER_FIREBASE_KEY)
-)
+if not WORKER_FIREBASE_KEY:
+    raise RuntimeError("Missing WORKER_FIREBASE_KEY")
 
-worker_app = firebase_admin.initialize_app(
-    worker_cred,
-    name="worker"
-)
+if not HUB_FIREBASE_KEY:
+    raise RuntimeError("Missing HUB_FIREBASE_KEY")
 
+if not SERVER_ID:
+    raise RuntimeError("Missing SERVER_ID")
+
+if not WORKER_WEBHOOK_URL:
+    raise RuntimeError("Missing WORKER_WEBHOOK_URL")
+
+# =========================================================
+# FIREBASE (WORKER)
+# =========================================================
+worker_cred = credentials.Certificate(json.loads(WORKER_FIREBASE_KEY))
+worker_app = firebase_admin.initialize_app(worker_cred, name="worker")
 worker_db = firestore.client(worker_app)
 
 # =========================================================
-# HUB FIREBASE
+# FIREBASE (HUB)
 # =========================================================
-hub_cred = credentials.Certificate(
-    json.loads(HUB_FIREBASE_KEY)
-)
-
-hub_app = firebase_admin.initialize_app(
-    hub_cred,
-    name="hub"
-)
-
+hub_cred = credentials.Certificate(json.loads(HUB_FIREBASE_KEY))
+hub_app = firebase_admin.initialize_app(hub_cred, name="hub")
 hub_db = firestore.client(hub_app)
 
 # =========================================================
 # LINE API
 # =========================================================
-LINE_REPLY_API = (
-    "https://line.me"
-)
-
-LINE_PUSH_API = (
-    "https://line.me"
-)
+LINE_REPLY_API = "https://api.line.me/v2/bot/message/reply"
+LINE_PUSH_API = "https://api.line.me/v2/bot/message/push"
 
 LINE_HEADERS = {
-
-    "Authorization":
-        f"Bearer {LINE_CHANNEL_ACCESS_TOKEN}",
-
-    "Content-Type":
-        "application/json"
+    "Authorization": f"Bearer {LINE_CHANNEL_ACCESS_TOKEN}",
+    "Content-Type": "application/json"
 }
 
 # =========================================================
-# HEARTBEAT LOOP
+# HEARTBEAT LOOP (REAL METRICS)
 # =========================================================
 def heartbeat_loop():
+
+    print("🔥 HEARTBEAT LOOP STARTED")
 
     while True:
 
         try:
-
-            # ================================
-            # REAL SYSTEM METRICS
-            # ================================
-            # ปรับ interval เป็น None เพื่อไม่ให้ Thread หยุดรอ 1 วินาที
             cpu = psutil.cpu_percent(interval=None)
-
             ram = psutil.virtual_memory().percent
-
-            # disk optional (ไม่จำเป็นแต่ดี)
             disk = psutil.disk_usage('/').percent
 
-            # ================================
-            # LOAD SCORE (simple formula)
-            # ================================
             load_score = (cpu * 0.5) + (ram * 0.5)
 
             save_data = {
-
                 "server_id": SERVER_ID,
-
                 "status": "online",
-
                 "cpu": cpu,
-
                 "ram": ram,
-
                 "disk": disk,
-
                 "load_score": load_score,
-
                 "cloud_url": WORKER_WEBHOOK_URL,
-
                 "last_heartbeat": int(time.time())
             }
 
-            hub_db.collection(
-                "hub_system"
-            ).document(
-                "server_pool"
-            ).collection(
-                "servers"
-            ).document(
-                SERVER_ID
-            ).set(
-                save_data,
-                merge=True
-            )
+            hub_db.collection("hub_system") \
+                .document("server_pool") \
+                .collection("servers") \
+                .document(SERVER_ID) \
+                .set(save_data, merge=True)
 
             print("HEARTBEAT SENT:", save_data)
 
@@ -168,463 +114,221 @@ def heartbeat_loop():
         time.sleep(30)
 
 # =========================================================
-# START HEARTBEAT THREAD
+# START HEARTBEAT (SAFE ONCE ONLY)
 # =========================================================
-@app.before_request
 def start_heartbeat_once():
     global heartbeat_started
-    if not heartbeat_started:
-        heartbeat_started = True
-        t = threading.Thread(target=heartbeat_loop, daemon=True)
-        t.start()
-        print("======== HEARTBEAT THREAD STARTED ========")
+
+    if heartbeat_started:
+        return
+
+    heartbeat_started = True
+
+    t = threading.Thread(
+        target=heartbeat_loop,
+        daemon=True
+    )
+
+    t.start()
+
+    print("======== HEARTBEAT THREAD STARTED ========")
 
 # =========================================================
 # HOME
 # =========================================================
 @app.route("/")
 def home():
-
     return f"{SERVER_ID} RUNNING"
+
+# =========================================================
+# START HEARTBEAT BEFORE FIRST REQUEST
+# =========================================================
+@app.before_request
+def ensure_heartbeat():
+    start_heartbeat_once()
 
 # =========================================================
 # CHECK REGISTER
 # =========================================================
-@app.route(
-    "/check-register",
-    methods=["POST"]
-)
+@app.route("/check-register", methods=["POST"])
 def check_register():
 
     try:
-
         body = request.get_json()
 
-        print("=" * 50)
-        print("CHECK REGISTER")
-        print(body)
-        print("=" * 50)
-
-        user_id = body.get(
-            "user_id"
-        )
+        user_id = body.get("user_id")
 
         if not user_id:
+            return jsonify({"registered": False})
 
-            return jsonify({
-
-                "registered":
-                    False
-            })
-
-        doc = (
-            worker_db
-            .collection("user")
-            .document(user_id)
-            .get()
-        )
+        doc = worker_db.collection("user").document(user_id).get()
 
         if not doc.exists:
-
-            return jsonify({
-
-                "registered":
-                    False
-            })
+            return jsonify({"registered": False})
 
         data = doc.to_dict()
 
-        registered = data.get(
-            "register",
-            False
-        )
-
         return jsonify({
-
-            "registered":
-                registered
+            "registered": data.get("register", False)
         })
 
-    except Exception as e:
-
+    except Exception:
         traceback.print_exc()
-
-        return jsonify({
-
-            "registered":
-                False,
-
-            "message":
-                str(e)
-        })
+        return jsonify({"registered": False})
 
 # =========================================================
 # REPLY MESSAGE
 # =========================================================
-def reply_message(
-    reply_token,
-    text
-):
+def reply_message(reply_token, text):
 
     payload = {
-
-        "replyToken":
-            reply_token,
-
+        "replyToken": reply_token,
         "messages": [
-
             {
-                "type":
-                    "text",
-
-                "text":
-                    text
+                "type": "text",
+                "text": text
             }
         ]
     }
 
     r = requests.post(
-
         LINE_REPLY_API,
-
         headers=LINE_HEADERS,
-
         json=payload,
-
         timeout=10
     )
 
-    print("=" * 50)
-    print("REPLY MESSAGE")
-    print(r.status_code)
-    print(r.text)
-    print("=" * 50)
+    print("REPLY:", r.status_code, r.text)
 
 # =========================================================
 # PUSH MESSAGE
 # =========================================================
-def push_message(
-    user_id,
-    text
-):
+def push_message(user_id, text):
 
     payload = {
-
-        "to":
-            user_id,
-
+        "to": user_id,
         "messages": [
-
             {
-                "type":
-                    "text",
-
-                "text":
-                    text
+                "type": "text",
+                "text": text
             }
         ]
     }
 
     r = requests.post(
-
         LINE_PUSH_API,
-
         headers=LINE_HEADERS,
-
         json=payload,
-
         timeout=10
     )
 
-    print("=" * 50)
-    print("PUSH MESSAGE")
-    print(r.status_code)
-    print(r.text)
-    print("=" * 50)
+    print("PUSH:", r.status_code, r.text)
 
 # =========================================================
 # WORKER WEBHOOK
 # =========================================================
-@app.route(
-    "/worker-webhook",
-    methods=["POST"]
-)
+@app.route("/worker-webhook", methods=["POST"])
 def worker_webhook():
 
     try:
-
         body = request.get_json()
 
-        print("=" * 50)
-        print("WORKER WEBHOOK")
-        print(json.dumps(
-            body,
-            indent=2,
-            ensure_ascii=False
-        ))
-        print("=" * 50)
-
-        events = body.get(
-            "events",
-            []
-        )
+        events = body.get("events", [])
 
         for event in events:
 
-            event_type = event.get(
-                "type"
-            )
+            event_type = event.get("type")
+            reply_token = event.get("replyToken")
 
-            reply_token = event.get(
-                "replyToken"
-            )
-
-            source = event.get(
-                "source",
-                {}
-            )
-
-            user_id = source.get(
-                "userId"
-            )
+            source = event.get("source", {})
+            user_id = source.get("userId")
 
             if not user_id:
                 continue
 
-            # =========================================
-            # GET USER
-            # =========================================
-            user_doc = (
-                worker_db
-                .collection("user")
-                .document(user_id)
-                .get()
-            )
+            user_doc = worker_db.collection("user").document(user_id).get()
 
             if not user_doc.exists:
-
-                print("USER NOT FOUND")
-
                 continue
 
             user_data = user_doc.to_dict()
+            fullname = user_data.get("fullname", "Unknown")
 
-            fullname = user_data.get(
-                "fullname",
-                "Unknown"
-            )
-
-            # =========================================
-            # MESSAGE EVENT
-            # =========================================
             if event_type == "message":
 
-                message = event.get(
-                    "message",
-                    {}
-                )
+                message = event.get("message", {})
+                text = message.get("text", "")
 
-                message_type = message.get(
-                    "type"
-                )
+                worker_db.collection("chat_logs").add({
+                    "user_id": user_id,
+                    "fullname": fullname,
+                    "text": text,
+                    "timestamp": datetime.utcnow()
+                })
 
-                # =====================================
-                # TEXT MESSAGE
-                # =====================================
-                if message_type == "text":
+                if text.lower() == "ping":
+                    reply_message(reply_token, "pong")
 
-                    text = message.get(
-                        "text",
-                        ""
+                elif text.lower() == "profile":
+                    reply_message(reply_token,
+                        f"ชื่อ: {fullname}\nUSER: {user_id}"
                     )
 
-                    print("TEXT =", text)
+                else:
+                    reply_message(reply_token,
+                        f"สวัสดี {fullname}\n{text}"
+                    )
 
-                    # =================================
-                    # SAVE CHAT LOG
-                    # =================================
-                    worker_db.collection(
-                        "chat_logs"
-                    ).add({
-
-                        "user_id":
-                            user_id,
-
-                        "fullname":
-                            fullname,
-
-                        "text":
-                            text,
-
-                        "timestamp":
-                            datetime.utcnow()
-                    })
-
-                    # =================================
-                    # COMMANDS
-                    # =================================
-                    if text.lower() == "ping":
-
-                        reply_message(
-
-                            reply_token,
-
-                            "pong"
-                        )
-
-                    elif text.lower() == "profile":
-
-                        profile_text = (
-
-                            f"ชื่อ: {fullname}\n"
-                            f"USER ID:\n{user_id}"
-                        )
-
-                        reply_message(
-
-                            reply_token,
-
-                            profile_text
-                        )
-
-                    else:
-
-                        reply_text = (
-
-                            f"สวัสดี {fullname}\n\n"
-                            f"ข้อความของคุณ:\n{text}"
-                        )
-
-                        reply_message(
-
-                            reply_token,
-
-                            reply_text
-                        )
-
-            # =========================================
-            # FOLLOW EVENT
-            # =========================================
             elif event_type == "follow":
+                push_message(user_id, "ยินดีต้อนรับ")
 
-                push_message(
-
-                    user_id,
-
-                    (
-                        "ยินดีต้อนรับ\n"
-                        "ระบบพร้อมใช้งานแล้ว"
-                    )
-                )
-
-        return jsonify({
-
-            "status":
-                "success"
-        })
+        return jsonify({"status": "success"})
 
     except Exception as e:
-
         traceback.print_exc()
-
-        return jsonify({
-
-            "status":
-                "error",
-
-            "message":
-                str(e)
-        }), 500
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 # =========================================================
 # REGISTER USER
-# ====================================================
-@app.route(
-    "/register-user",
-    methods=["POST"]
-)
+# =========================================================
+@app.route("/register-user", methods=["POST"])
 def register_user():
 
     try:
-
         body = request.get_json()
 
-        print("=" * 50)
-        print("REGISTER USER")
-        print(json.dumps(
-            body,
-            indent=2,
-            ensure_ascii=False
-        ))
-        print("=" * 50)
-
-        # =========================
-        # GET DATA
-        # =========================
-        user_id = body.get(
-            "user_id"
-        )
+        user_id = body.get("user_id")
 
         if not user_id:
+            return jsonify({"status": "error", "message": "no user_id"})
 
-            return jsonify({
-
-                "status":
-                    "error",
-
-                "message":
-                    "no user_id"
-            })
-
-        save_data = {
-
-            "userId":
-                user_id,
-
-            "fullname":
-                body.get("name"),
-
-            "phone":
-                body.get("phone"),
-
-            "email":
-                body.get("email"),
-
-            "register":
-                True,
-
-            "created_at":
-                datetime.utcnow()
-        }
-
-        (
-            worker_db
-            .collection("user")
-            .document(user_id)
-            .set(save_data)
-        )
+        worker_db.collection("user").document(user_id).set({
+            "userId": user_id,
+            "fullname": body.get("name"),
+            "phone": body.get("phone"),
+            "email": body.get("email"),
+            "register": True,
+            "created_at": datetime.utcnow()
+        })
 
         return jsonify({
-
-            "status":
-                "success",
-
-            "message":
-                "ลงทะเบียนสำเร็จ"
+            "status": "success",
+            "message": "ลงทะเบียนสำเร็จ"
         })
 
     except Exception as e:
-
         traceback.print_exc()
+        return jsonify({"status": "error", "message": str(e)}), 500
 
-        return jsonify({
-
-            "status":
-                "error",
-
-            "message":
-                str(e)
-        }), 500
+# =========================================================
+# RUN
+# =========================================================
 if __name__ == "__main__":
-    # เปิดใช้งานเพื่อรันเซิร์ฟเวอร์แบบ Local สำหรับทดสอบ
-    app.run(host="0.0.0.0", port=5000, debug=True)
+
+    start_heartbeat_once()
+
+    app.run(
+        host="0.0.0.0",
+        port=int(os.environ.get("PORT", 8080)),
+        debug=True
+    )
