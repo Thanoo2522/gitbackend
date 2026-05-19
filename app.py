@@ -6,7 +6,7 @@ import traceback
 import requests
 import time
 import threading
-import psutil
+import psutil 
 
 from datetime import datetime
 
@@ -81,9 +81,8 @@ def heartbeat_loop():
     print("🔥 HEARTBEAT LOOP STARTED")
 
     while True:
-
         try:
-            cpu = psutil.cpu_percent(interval=None)
+            cpu = psutil.cpu_percent(interval=1)
             ram = psutil.virtual_memory().percent
             disk = psutil.disk_usage('/').percent
 
@@ -100,15 +99,18 @@ def heartbeat_loop():
                 "last_heartbeat": int(time.time())
             }
 
+            print("SENDING HEARTBEAT:", save_data)
+
             hub_db.collection("hub_system") \
                 .document("server_pool") \
                 .collection("servers") \
                 .document(SERVER_ID) \
                 .set(save_data, merge=True)
 
-            print("HEARTBEAT SENT:", save_data)
+            print("✅ HEARTBEAT UPDATED")
 
-        except Exception:
+        except Exception as e:
+            print("❌ HEARTBEAT ERROR:", str(e))
             traceback.print_exc()
 
         time.sleep(30)
@@ -116,23 +118,10 @@ def heartbeat_loop():
 # =========================================================
 # START HEARTBEAT (SAFE ONCE ONLY)
 # =========================================================
-def start_heartbeat_once():
-    global heartbeat_started
-
-    if heartbeat_started:
-        return
-
-    heartbeat_started = True
-
-    t = threading.Thread(
-        target=heartbeat_loop,
-        daemon=True
-    )
-
+def start_heartbeat():
+    t = threading.Thread(target=heartbeat_loop, daemon=True)
     t.start()
-
-    print("======== HEARTBEAT THREAD STARTED ========")
-
+    print("🚀 HEARTBEAT THREAD STARTED")
 # =========================================================
 # HOME
 # =========================================================
@@ -145,7 +134,7 @@ def home():
 # =========================================================
 @app.before_request
 def ensure_heartbeat():
-    start_heartbeat_once()
+    start_heartbeat()
 
 # =========================================================
 # CHECK REGISTER
@@ -324,8 +313,7 @@ def register_user():
 # RUN
 # =========================================================
 if __name__ == "__main__":
-
-    start_heartbeat_once()
+    start_heartbeat()
 
     app.run(
         host="0.0.0.0",
