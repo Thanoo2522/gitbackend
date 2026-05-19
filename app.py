@@ -625,19 +625,27 @@ def register_user():
 # =========================================================
 # RUN
 # =========================================================
+# =========================================================
+# START HEARTBEAT IMMEDIATELY
+# =========================================================
+print("=" * 50)
+print("START HEARTBEAT THREAD")
+print("=" * 50)
+
+heartbeat_thread = threading.Thread(
+
+    target=heartbeat_loop,
+
+    daemon=True
+
+)
+
+heartbeat_thread.start()
+
+# =========================================================
+# RUN
+# =========================================================
 if __name__ == "__main__":
-
-    print("=" * 50)
-    print("START HEARTBEAT THREAD")
-    print("=" * 50)
-
-    threading.Thread(
-
-        target=heartbeat_loop,
-
-        daemon=True
-
-    ).start()
 
     app.run(
 
