@@ -5,7 +5,6 @@ import traceback
 import requests
 import time
 import threading
-import psutil
 from datetime import datetime
 
 import firebase_admin
