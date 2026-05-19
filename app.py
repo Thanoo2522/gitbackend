@@ -7,6 +7,11 @@ import requests
 import time
 import threading
 
+import psutil
+ 
+ 
+
+
 from datetime import datetime
 
 import firebase_admin
@@ -104,63 +109,65 @@ LINE_HEADERS = {
 # =========================================================
 # HEARTBEAT LOOP
 # =========================================================
+ import psutil
+import time
+import traceback
+
 def heartbeat_loop():
 
     while True:
 
         try:
 
-            print("=" * 50)
-            print("HEARTBEAT LOOP")
-            print("SERVER_ID =", SERVER_ID)
-            print("WORKER_WEBHOOK_URL =", WORKER_WEBHOOK_URL)
-            print("=" * 50)
+            # ================================
+            # REAL SYSTEM METRICS
+            # ================================
+
+            cpu = psutil.cpu_percent(interval=1)
+
+            ram = psutil.virtual_memory().percent
+
+            # disk optional (ไม่จำเป็นแต่ดี)
+            disk = psutil.disk_usage('/').percent
+
+            # ================================
+            # LOAD SCORE (simple formula)
+            # ================================
+            load_score = (cpu * 0.5) + (ram * 0.5)
 
             save_data = {
 
-                "server_id":
-                    SERVER_ID,
+                "server_id": SERVER_ID,
 
-                "status":
-                    "online",
+                "status": "online",
 
-                "cpu":
-                    10,
+                "cpu": cpu,
 
-                "ram":
-                    20,
+                "ram": ram,
 
-                "load_score":
-                    5,
+                "disk": disk,
 
-                "cloud_url":
-                    WORKER_WEBHOOK_URL,
+                "load_score": load_score,
 
-                "last_heartbeat":
-                    int(time.time())
+                "cloud_url": WORKER_WEBHOOK_URL,
+
+                "last_heartbeat": int(time.time())
             }
 
-            print("START WRITE HUB FIRESTORE")
-
-            (
-                hub_db
-                .collection("hub_system")
-                .document("server_pool")
-                .collection("servers")
-                .document(SERVER_ID)
-                .set(save_data, merge=True)
+            hub_db.collection(
+                "hub_system"
+            ).document(
+                "server_pool"
+            ).collection(
+                "servers"
+            ).document(
+                SERVER_ID
+            ).set(
+                save_data,
+                merge=True
             )
 
-            print("HUB FIRESTORE WRITE SUCCESS")
-
-            print("=" * 50)
-            print("HEARTBEAT SENT")
-            print(json.dumps(
-                save_data,
-                indent=2,
-                ensure_ascii=False
-            ))
-            print("=" * 50)
+            print("HEARTBEAT SENT:", save_data)
 
         except Exception:
             traceback.print_exc()
