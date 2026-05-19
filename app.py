@@ -9,9 +9,6 @@ import threading
 
 import psutil
  
- 
-
-
 from datetime import datetime
 
 import firebase_admin
@@ -90,11 +87,11 @@ hub_db = firestore.client(hub_app)
 # LINE API
 # =========================================================
 LINE_REPLY_API = (
-    "https://api.line.me/v2/bot/message/reply"
+    "https://line.me"
 )
 
 LINE_PUSH_API = (
-    "https://api.line.me/v2/bot/message/push"
+    "https://line.me"
 )
 
 LINE_HEADERS = {
@@ -109,10 +106,6 @@ LINE_HEADERS = {
 # =========================================================
 # HEARTBEAT LOOP
 # =========================================================
- import psutil
-import time
-import traceback
-
 def heartbeat_loop():
 
     while True:
@@ -122,8 +115,8 @@ def heartbeat_loop():
             # ================================
             # REAL SYSTEM METRICS
             # ================================
-
-            cpu = psutil.cpu_percent(interval=1)
+            # ปรับ interval เป็น None เพื่อไม่ให้ Thread หยุดรอ 1 วินาที
+            cpu = psutil.cpu_percent(interval=None)
 
             ram = psutil.virtual_memory().percent
 
@@ -177,7 +170,14 @@ def heartbeat_loop():
 # =========================================================
 # START HEARTBEAT THREAD
 # =========================================================
- 
+@app.before_request
+def start_heartbeat_once():
+    global heartbeat_started
+    if not heartbeat_started:
+        heartbeat_started = True
+        t = threading.Thread(target=heartbeat_loop, daemon=True)
+        t.start()
+        print("======== HEARTBEAT THREAD STARTED ========")
 
 # =========================================================
 # HOME
@@ -625,40 +625,6 @@ def register_user():
             "message":
                 str(e)
         }), 500
-
-# =========================================================
-# RUN
-# =========================================================
-# =========================================================
-# START HEARTBEAT IMMEDIATELY
-# =========================================================
-print("=" * 50)
-print("START HEARTBEAT THREAD")
-print("=" * 50)
-
-heartbeat_thread = threading.Thread(
-
-    target=heartbeat_loop,
-
-    daemon=True
-
-)
-
-heartbeat_thread.start()
-
-# ==================================================== 
-# RUN
-# =========================================================
 if __name__ == "__main__":
-
-    app.run(
-
-        host="0.0.0.0",
-
-        port=int(
-            os.environ.get(
-                "PORT",
-                8080
-            )
-        )
-    )
+    # เปิดใช้งานเพื่อรันเซิร์ฟเวอร์แบบ Local สำหรับทดสอบ
+    app.run(host="0.0.0.0", port=5000, debug=True)
