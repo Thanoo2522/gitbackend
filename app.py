@@ -551,8 +551,11 @@ def register_user():
         ))
         print("=" * 50)
 
+        # =========================
+        # GET DATA
+        # =========================
         user_id = body.get(
-            "userId"
+            "user_id"
         )
 
         if not user_id:
@@ -563,7 +566,7 @@ def register_user():
                     "error",
 
                 "message":
-                    "no userId"
+                    "no user_id"
             })
 
         save_data = {
@@ -571,20 +574,14 @@ def register_user():
             "userId":
                 user_id,
 
-            "displayName":
-                body.get("displayName"),
-
-            "pictureUrl":
-                body.get("pictureUrl"),
-
             "fullname":
-                body.get("fullname"),
+                body.get("name"),
 
             "phone":
                 body.get("phone"),
 
-            "worker":
-                body.get("worker"),
+            "email":
+                body.get("email"),
 
             "register":
                 True,
