@@ -260,32 +260,7 @@ def worker_webhook():
 # =========================================================
 # REGISTER USER
 # =================================================== 
-@app.route("/register-user", methods=["POST"])
-def register_user():
-    try:
-        body = request.get_json(silent=True) or {}
-
-        user_id = body.get("user_id")
-        if not user_id:
-            return jsonify({"status": "error", "message": "no user_id"})
-
-        worker_db.collection("user").document(user_id).set({
-            "userId": user_id,
-            "fullname": body.get("name", ""),
-            "phone": body.get("phone", ""),
-            "email": body.get("email", ""),
-            "register": True,
-            "created_at": datetime.utcnow()
-        })
-
-        return jsonify({
-            "status": "success",
-            "message": "ลงทะเบียนสำเร็จ"
-        })
-
-    except Exception as e:
-        traceback.print_exc()
-        return jsonify({"status": "error", "message": str(e)}), 500
+ 
 
 # =========================================================
 # RUN
