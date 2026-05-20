@@ -535,7 +535,35 @@ def worker_webhook():
             "message": str(e)
 
         }), 500
+@app.route("/test-write", methods=["POST"])
+def test_write():
+    try:
+        body = request.get_json(silent=True) or {}
 
+        print("TEST WRITE BODY =", body)
+
+        user_id = body.get("user_id", "unknown")
+
+        # เขียนลง Firestore (worker DB)
+        worker_db.collection("test_data").document(user_id).set({
+            "user_id": user_id,
+            "message": body.get("message", ""),
+            "created_at": datetime.utcnow(),
+            "server_id": SERVER_ID
+        })
+
+        return jsonify({
+            "status": "success",
+            "message": "write to firestore ok"
+        })
+
+    except Exception as e:
+        traceback.print_exc()
+
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
 # =========================================================
 # RUN
 # ======================================================
