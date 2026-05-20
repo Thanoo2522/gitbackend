@@ -385,7 +385,130 @@ def push_message(user_id, text):
     except Exception as e:
 
         print("push error:", e)
+#---------------------------------------------------------
+# =========================================================
+# MAIN ROUTE
+# =========================================================
+@app.route("/main-route", methods=["POST"])
+def main_route():
 
+    try:
+
+        body = request.get_json(
+            silent=True
+        ) or {}
+
+        print("=" * 50)
+        print("MAIN ROUTE")
+        print(json.dumps(
+            body,
+            indent=2,
+            ensure_ascii=False
+        ))
+        print("=" * 50)
+
+        events = body.get(
+            "events",
+            []
+        )
+
+        for event in events:
+
+            event_type = event.get(
+                "type"
+            )
+
+            if event_type != "message":
+                continue
+
+            # ====================================
+            # BASIC
+            # ====================================
+
+            reply_token = event.get(
+                "replyToken"
+            )
+
+            source = event.get(
+                "source",
+                {}
+            )
+
+            user_id = source.get(
+                "userId"
+            )
+
+            text = event.get(
+                "message",
+                {}
+            ).get(
+                "text",
+                ""
+            ).strip()
+
+            print("TEXT =", text)
+
+            if not user_id:
+                continue
+
+            # ====================================
+            # TEST COMMAND
+            # ====================================
+
+            if text.lower() == "test":
+
+                # SAVE FIRESTORE
+                worker_db.collection(
+                    "test_logs"
+                ).add({
+
+                    "user_id":
+                        user_id,
+
+                    "text":
+                        text,
+
+                    "worker":
+                        SERVER_ID,
+
+                    "timestamp":
+                        datetime.utcnow()
+                })
+
+                print("✅ SAVED")
+
+                # REPLY LINE
+                reply_message(
+
+                    reply_token,
+
+                    "บันทึก test สำเร็จ"
+                )
+
+            else:
+
+                reply_message(
+
+                    reply_token,
+
+                    f"คุณพิมพ์: {text}"
+                )
+
+        return jsonify({
+            "status": "success"
+        })
+
+    except Exception as e:
+
+        traceback.print_exc()
+
+        return jsonify({
+
+            "status": "error",
+
+            "message": str(e)
+
+        }), 500
 # =========================================================
 # WORKER WEBHOOK
 # =========================================================
