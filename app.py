@@ -158,10 +158,11 @@ def heartbeat_loop():
 
         except Exception as e:
 
-            print("❌ HEARTBEAT ERROR:", str(e))
+            print("❌ HEARTBEAT ERROR")
 
             traceback.print_exc()
 
+        # LOOP EVERY 30 SEC
         time.sleep(30)
 
 # =========================================================
@@ -177,19 +178,19 @@ def start_heartbeat_once():
     heartbeat_started = True
 
     threading.Thread(
+
         target=heartbeat_loop,
+
         daemon=True
+
     ).start()
 
     print("🚀 HEARTBEAT STARTED")
 
 # =========================================================
-# STARTUP HOOK
+# START HEARTBEAT ON BOOT
 # =========================================================
-@app.before_request
-def ensure_heartbeat():
-
-    start_heartbeat_once()
+start_heartbeat_once()
 
 # =========================================================
 # HOME
@@ -539,8 +540,6 @@ def worker_webhook():
 # RUN
 # =========================================================
 if __name__ == "__main__":
-
-    start_heartbeat_once()
 
     app.run(
 
