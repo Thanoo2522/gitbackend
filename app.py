@@ -11,6 +11,9 @@ from datetime import datetime
 
 import firebase_admin
 from firebase_admin import credentials, firestore
+from PIL import Image
+from io import BytesIO
+import uuid
 
 # =========================================================
 # FLASK
@@ -389,6 +392,11 @@ def push_message(user_id, text):
 # =========================================================
 # MAIN ROUTE
 # =========================================================
+
+
+# =========================================================
+# MAIN ROUTE
+# =========================================================
 @app.route("/main-route", methods=["POST"])
 def main_route():
 
@@ -407,92 +415,381 @@ def main_route():
         ))
         print("=" * 50)
 
-        events = body.get(
-            "events",
-            []
-        )
+        events = body.get("events", [])
 
         for event in events:
 
-            event_type = event.get(
+            if event.get("type") != "message":
+                continue
+
+            message = event.get(
+                "message",
+                {}
+            )
+
+            message_type = message.get(
                 "type"
             )
 
-            if event_type != "message":
-                continue
+            # ====================================
+            # TEXT MESSAGE
+            # ====================================
+            if message_type == "text":
+
+                text = message.get(
+                    "text",
+                    ""
+                ).strip()
+
+                parts = text.split(" ")
+
+                command = parts[0].lower()
+
+                # ====================================
+                # IMAGE COLOR
+                # imagecolor red
+                # ====================================
+                if command == "imagecolor":
+
+                    return imagecolor(
+                        event,
+                        parts
+                    )
+
+                else:
+
+                    reply_message(
+
+                        event.get(
+                            "replyToken"
+                        ),
+
+                        "ไม่รู้จัก command"
+                    )
 
             # ====================================
-            # BASIC
+            # IMAGE MESSAGE
             # ====================================
+            elif message_type == "image":
 
-            reply_token = event.get(
-                "replyToken"
-            )
-
-            source = event.get(
-                "source",
-                {}
-            )
-
-            user_id = source.get(
-                "userId"
-            )
-
-            text = event.get(
-                "message",
-                {}
-            ).get(
-                "text",
-                ""
-            ).strip()
-
-            print("TEXT =", text)
-
-            if not user_id:
-                continue
-
-            # ====================================
-            # TEST COMMAND
-            # ====================================
-
-            if text.lower() == "test":
-
-                # SAVE FIRESTORE
-                worker_db.collection(
-                    "test_logs"
-                ).add({
-
-                    "user_id":
-                        user_id,
-
-                    "text":
-                        text,
-
-                    "worker":
-                        SERVER_ID,
-
-                    "timestamp":
-                        datetime.utcnow()
-                })
-
-                print("✅ SAVED")
-
-                # REPLY LINE
-                reply_message(
-
-                    reply_token,
-
-                    "บันทึก test สำเร็จ"
+                return handle_image(
+                    event
                 )
 
-            else:
+        return jsonify({
+            "status": "success"
+        })
 
-                reply_message(
+    except Exception as e:
 
-                    reply_token,
+        traceback.print_exc()
 
-                    f"คุณพิมพ์: {text}"
-                )
+        return jsonify({
+
+            "status": "error",
+
+            "message": str(e)
+
+        }), 500
+
+# =========================================================
+# IMAGE COLOR
+# imagecolor red
+# =========================================================
+def imagecolor(event, parts):
+
+    try:
+
+        reply_token = event.get(
+            "replyToken"
+        )
+
+        source = event.get(
+            "source",
+            {}
+        )
+
+        user_id = source.get(
+            "userId"
+        )
+
+        # ====================================
+        # VALIDATE
+        # ====================================
+
+        if len(parts) < 2:
+
+            reply_message(
+
+                reply_token,
+
+                "รูปแบบ:\n"
+                "imagecolor red"
+            )
+
+            return jsonify({
+                "status": "error"
+            })
+
+        # ====================================
+        # GET LABEL
+        # ====================================
+
+        project_name = "imagecolor"
+
+        label_name = parts[1].lower()
+
+        # ====================================
+        # SAVE SESSION
+        # ====================================
+
+        worker_db.collection(
+            "dataset_session"
+        ).document(user_id).set({
+
+            "mode":
+                "imagecolor",
+
+            "project":
+                project_name,
+
+            "label":
+                label_name,
+
+            "updated_at":
+                datetime.utcnow()
+        })
+
+        print("SESSION SAVED")
+
+        # ====================================
+        # REPLY
+        # ====================================
+
+        reply_message(
+
+            reply_token,
+
+            f"บันทึกเรียบร้อย\n\n"
+            f"PROJECT: {project_name}\n"
+            f"LABEL: {label_name}\n\n"
+            f"ส่งรูปหมวด {label_name}"
+        )
+
+        return jsonify({
+            "status": "success"
+        })
+
+    except Exception as e:
+
+        traceback.print_exc()
+
+        return jsonify({
+
+            "status": "error",
+
+            "message": str(e)
+
+        }), 500
+
+# =========================================================
+# HANDLE IMAGE
+# =========================================================
+def handle_image(event):
+
+    try:
+
+        reply_token = event.get(
+            "replyToken"
+        )
+
+        source = event.get(
+            "source",
+            {}
+        )
+
+        user_id = source.get(
+            "userId"
+        )
+
+        message = event.get(
+            "message",
+            {}
+        )
+
+        # ====================================
+        # GET SESSION
+        # ====================================
+
+        session_doc = worker_db.collection(
+            "dataset_session"
+        ).document(user_id).get()
+
+        if not session_doc.exists:
+
+            reply_message(
+
+                reply_token,
+
+                "กรุณาพิมพ์:\n"
+                "imagecolor red"
+            )
+
+            return jsonify({
+                "status": "error"
+            })
+
+        session_data = session_doc.to_dict()
+
+        project_name = session_data.get(
+            "project"
+        )
+
+        label_name = session_data.get(
+            "label"
+        )
+
+        # ====================================
+        # GET IMAGE CONTENT
+        # ====================================
+
+        message_id = message.get("id")
+
+        image_url = (
+            "https://api-data.line.me/v2/bot/message/"
+            f"{message_id}/content"
+        )
+
+        r = requests.get(
+
+            image_url,
+
+            headers={
+
+                "Authorization":
+                    f"Bearer {LINE_CHANNEL_ACCESS_TOKEN}"
+            },
+
+            timeout=30
+        )
+
+        # ====================================
+        # OPEN IMAGE
+        # ====================================
+
+        image = Image.open(
+            BytesIO(r.content)
+        )
+
+        # ====================================
+        # RGB
+        # ====================================
+
+        image = image.convert(
+            "RGB"
+        )
+
+        # ====================================
+        # RESIZE 224x224
+        # ====================================
+
+        image = image.resize(
+            (224, 224)
+        )
+
+        # ====================================
+        # FILE NAME
+        # ====================================
+
+        filename = (
+            str(uuid.uuid4())
+            + ".jpg"
+        )
+
+        # ====================================
+        # TEMP PATH
+        # ====================================
+
+        temp_path = (
+            f"/tmp/{filename}"
+        )
+
+        image.save(
+
+            temp_path,
+
+            format="JPEG"
+        )
+
+        print(
+            "IMAGE SAVED =",
+            temp_path
+        )
+
+        # ====================================
+        # STORAGE PATH
+        # ====================================
+
+        storage_path = (
+
+            f"{project_name}/"
+            f"{label_name}/"
+            f"{filename}"
+        )
+
+        # ====================================
+        # TODO:
+        # UPLOAD TO FIREBASE STORAGE
+        # ====================================
+
+        # ====================================
+        # SAVE FIRESTORE
+        # ====================================
+
+        worker_db.collection(
+            project_name
+        ).document(
+            label_name
+        ).collection(
+            "dataset"
+        ).add({
+
+            "user_id":
+                user_id,
+
+            "project":
+                project_name,
+
+            "label":
+                label_name,
+
+            "storage_path":
+                storage_path,
+
+            "width":
+                224,
+
+            "height":
+                224,
+
+            "created_at":
+                datetime.utcnow()
+        })
+
+        print("DATASET SAVED")
+
+        # ====================================
+        # REPLY
+        # ====================================
+
+        reply_message(
+
+            reply_token,
+
+            f"บันทึกรูปสำเร็จ\n\n"
+            f"{storage_path}\n\n"
+            f"ส่งรูปต่อได้เลย"
+        )
 
         return jsonify({
             "status": "success"
