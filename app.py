@@ -620,7 +620,7 @@ def imagecolor(event, parts):
 
 # =========================================================
 # HANDLE IMAGE
-def handle_image(event, image_data):
+def handle_image(event):
 
     try:
 
@@ -635,6 +635,11 @@ def handle_image(event, image_data):
 
         user_id = source.get(
             "userId"
+        )
+
+        message = event.get(
+            "message",
+            {}
         )
 
         # ====================================
@@ -673,14 +678,59 @@ def handle_image(event, image_data):
         print("LABEL =", label_name)
 
         # ====================================
-        # CHECK IMAGE DATA
+        # GET IMAGE FROM LINE
         # ====================================
 
-        if not image_data:
+        message_id = message.get(
+            "id"
+        )
+
+        print(
+            "MESSAGE ID =",
+            message_id
+        )
+
+        image_url = (
+
+            "https://api-data.line.me/v2/bot/message/"
+            f"{message_id}/content"
+        )
+
+        print(
+            "DOWNLOAD IMAGE FROM LINE"
+        )
+
+        r = requests.get(
+
+            image_url,
+
+            headers={
+
+                "Authorization":
+                    f"Bearer {LINE_CHANNEL_ACCESS_TOKEN}"
+            },
+
+            timeout=30
+        )
+
+        print(
+            "LINE STATUS =",
+            r.status_code
+        )
+
+        if r.status_code != 200:
+
+            print(
+                "LINE ERROR =",
+                r.text
+            )
 
             reply_message(
+
                 reply_token,
-                "ไม่พบ image_data"
+
+                f"โหลดรูปไม่สำเร็จ\n"
+                f"STATUS: {r.status_code}"
             )
 
             return jsonify({
@@ -688,19 +738,11 @@ def handle_image(event, image_data):
             })
 
         # ====================================
-        # BASE64 DECODE
-        # ====================================
-
-        image_bytes = base64.b64decode(
-            image_data
-        )
-
-        # ====================================
         # OPEN IMAGE
         # ====================================
 
         image = Image.open(
-            BytesIO(image_bytes)
+            BytesIO(r.content)
         )
 
         # ====================================
@@ -744,7 +786,7 @@ def handle_image(event, image_data):
         )
 
         print(
-            "IMAGE SAVED =",
+            "TEMP SAVED =",
             temp_path
         )
 
@@ -783,8 +825,13 @@ def handle_image(event, image_data):
 
         public_url = blob.public_url
 
-        print("UPLOAD SUCCESS")
-        print(public_url)
+        print(
+            "UPLOAD SUCCESS"
+        )
+
+        print(
+            public_url
+        )
 
         # ====================================
         # SAVE FIRESTORE
@@ -823,7 +870,9 @@ def handle_image(event, image_data):
                 datetime.utcnow()
         })
 
-        print("DATASET SAVED")
+        print(
+            "DATASET SAVED"
+        )
 
         # ====================================
         # DELETE TEMP
