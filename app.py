@@ -148,7 +148,7 @@ LINE_HEADERS = {
 }
 
 # =========================================================
-# HEARTBEAT LOOP
+# HEARTBEAT LOOP กระตุ้กไปที่ HUB  ให้รู้ว่ายังonline อยู่
 # =========================================================
 def heartbeat_loop():
 
@@ -383,7 +383,7 @@ def reply_message(reply_token, text):
     except Exception as e:
 
         print("reply error:", e)
-
+#=====================================
 def push_message(user_id, text):
 
     try:
@@ -903,183 +903,8 @@ def handle_image(event):
 
         }), 500
 # =========================================================
-# WORKER WEBHOOK
-# =========================================================
-@app.route("/worker-webhook", methods=["POST"])
-def worker_webhook():
-
-    try:
-
-        body = request.get_json(
-            silent=True
-        ) or {}
-
-        print("=" * 50)
-        print("WORKER WEBHOOK")
-        print(json.dumps(
-            body,
-            indent=2,
-            ensure_ascii=False
-        ))
-        print("=" * 50)
-
-        events = body.get("events", [])
-
-        for event in events:
-
-            event_type = event.get("type")
-
-            reply_token = event.get(
-                "replyToken"
-            )
-
-            source = event.get(
-                "source",
-                {}
-            )
-
-            user_id = source.get(
-                "userId"
-            )
-
-            if not user_id:
-                continue
-
-            # ====================================
-            # GET USER
-            # ====================================
-
-            user_doc = worker_db.collection("user") \
-                .document(user_id) \
-                .get()
-
-            if not user_doc.exists:
-                continue
-
-            user_data = user_doc.to_dict()
-
-            fullname = user_data.get(
-                "fullname",
-                "Unknown"
-            )
-
-            # ====================================
-            # MESSAGE EVENT
-            # ====================================
-
-            if event_type == "message":
-
-                text = event.get(
-                    "message",
-                    {}
-                ).get(
-                    "text",
-                    ""
-                )
-
-                print("TEXT =", text)
-
-                # SAVE CHAT LOG
-                worker_db.collection("chat_logs") \
-                    .add({
-
-                        "user_id":
-                            user_id,
-
-                        "fullname":
-                            fullname,
-
-                        "text":
-                            text,
-
-                        "timestamp":
-                            datetime.utcnow()
-                    })
-
-                # COMMANDS
-                if text.lower() == "ping":
-
-                    reply_message(
-                        reply_token,
-                        "pong"
-                    )
-
-                elif text.lower() == "profile":
-
-                    reply_message(
-
-                        reply_token,
-
-                        f"ชื่อ: {fullname}\n"
-                        f"USER: {user_id}\n"
-                        f"WORKER: {SERVER_ID}"
-                    )
-
-                else:
-
-                    reply_message(
-
-                        reply_token,
-
-                        f"สวัสดี {fullname}\n\n"
-                        f"คุณพิมพ์: {text}"
-                    )
-
-            # ====================================
-            # FOLLOW EVENT
-            # ====================================
-
-            elif event_type == "follow":
-
-                push_message(
-                    user_id,
-                    "ยินดีต้อนรับ"
-                )
-
-        return jsonify({
-            "status": "success"
-        })
-
-    except Exception as e:
-
-        traceback.print_exc()
-
-        return jsonify({
-
-            "status": "error",
-
-            "message": str(e)
-
-        }), 500
-@app.route("/test-write", methods=["POST"])
-def test_write():
-    try:
-        body = request.get_json(silent=True) or {}
-
-        print("TEST WRITE BODY =", body)
-
-        user_id = body.get("user_id", "unknown")
-
-        # เขียนลง Firestore (worker DB)
-        worker_db.collection("test_data").document(user_id).set({
-            "user_id": user_id,
-            "message": body.get("message", ""),
-            "created_at": datetime.utcnow(),
-            "server_id": SERVER_ID
-        })
-
-        return jsonify({
-            "status": "success",
-            "message": "write to firestore ok"
-        })
-
-    except Exception as e:
-        traceback.print_exc()
-
-        return jsonify({
-            "status": "error",
-            "message": str(e)
-        }), 500
+ 
+ 
 # =========================================================
 # RUN
 # ======================================================
