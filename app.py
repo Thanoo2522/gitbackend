@@ -112,7 +112,7 @@ worker_app = firebase_admin.initialize_app(
 
     {
         "storageBucket":
-            "basework-51f3b.appspot.com"
+            "basework-51f3b.firebasestorage.app"
     },
 
     name="worker"
