@@ -10,7 +10,7 @@ import threading
 from datetime import datetime
 
 import firebase_admin
-from firebase_admin import credentials, firestore
+from firebase_admin import credentials, firestore,storage
 from PIL import Image
 from io import BytesIO
 import uuid
@@ -20,6 +20,12 @@ import uuid
 # =========================================================
 app = Flask(__name__)
 
+#=======================================================
+cred = credentials.Certificate("serviceAccount.json")
+firebase_admin.initialize_app(cred, {
+    'storageBucket': 'basework-51f3b.appspot.com'
+})
+bucket = storage.bucket()
 # =========================================================
 # HEARTBEAT STATE
 # =========================================================
@@ -595,6 +601,9 @@ def imagecolor(event, parts):
 # =========================================================
 # HANDLE IMAGE
 # =========================================================
+# =========================================================
+# HANDLE IMAGE
+# =========================================================
 def handle_image(event):
 
     try:
@@ -649,6 +658,9 @@ def handle_image(event):
             "label"
         )
 
+        print("PROJECT =", project_name)
+        print("LABEL =", label_name)
+
         # ====================================
         # GET IMAGE CONTENT
         # ====================================
@@ -672,6 +684,19 @@ def handle_image(event):
 
             timeout=30
         )
+
+        if r.status_code != 200:
+
+            print("DOWNLOAD ERROR =", r.text)
+
+            reply_message(
+                reply_token,
+                "โหลดรูปไม่สำเร็จ"
+            )
+
+            return jsonify({
+                "status": "error"
+            })
 
         # ====================================
         # OPEN IMAGE
@@ -737,10 +762,33 @@ def handle_image(event):
             f"{filename}"
         )
 
+        print(
+            "STORAGE PATH =",
+            storage_path
+        )
+
         # ====================================
-        # TODO:
         # UPLOAD TO FIREBASE STORAGE
         # ====================================
+
+        blob = bucket.blob(
+            storage_path
+        )
+
+        blob.upload_from_filename(
+
+            temp_path,
+
+            content_type="image/jpeg"
+        )
+
+        # PUBLIC URL
+        blob.make_public()
+
+        public_url = blob.public_url
+
+        print("UPLOAD SUCCESS")
+        print("PUBLIC URL =", public_url)
 
         # ====================================
         # SAVE FIRESTORE
@@ -766,6 +814,9 @@ def handle_image(event):
             "storage_path":
                 storage_path,
 
+            "image_url":
+                public_url,
+
             "width":
                 224,
 
@@ -779,15 +830,32 @@ def handle_image(event):
         print("DATASET SAVED")
 
         # ====================================
-        # REPLY
+        # DELETE TEMP FILE
         # ====================================
 
+        if os.path.exists(
+            temp_path
+        ):
+
+            os.remove(
+                temp_path
+            )
+
+            print(
+                "TEMP FILE REMOVED"
+            )
+
+        # ====================================
+        # REPLY
+        # ====================================
+        clean_label = label_name.replace(".jpg","") #เอา .jpg ออก
         reply_message(
 
             reply_token,
 
             f"บันทึกรูปสำเร็จ\n\n"
-            f"{storage_path}\n\n"
+            #f"LABEL: {label_name}\n"
+            f"LABEL: {clean_label}\n"
             f"ส่งรูปต่อได้เลย"
         )
 
@@ -798,6 +866,15 @@ def handle_image(event):
     except Exception as e:
 
         traceback.print_exc()
+
+        reply_message(
+
+            event.get(
+                "replyToken"
+            ),
+
+            f"เกิดข้อผิดพลาด\n{str(e)}"
+        )
 
         return jsonify({
 
