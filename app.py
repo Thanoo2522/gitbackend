@@ -50,10 +50,9 @@ WORKER_WEBHOOK_URL = os.environ.get(
     "WORKER_WEBHOOK_URL"
 )
 
-# =========================================================
-# STORAGE
-# =========================================================
-BUCKET_NAME = "basework-51f3b.appspot.com"
+BUCKET_NAME = os.environ.get(
+    "BUCKET_NAME"
+)
 
 # =========================================================
 # VALIDATION
@@ -73,7 +72,10 @@ required_env = {
         SERVER_ID,
 
     "WORKER_WEBHOOK_URL":
-        WORKER_WEBHOOK_URL
+        WORKER_WEBHOOK_URL,
+
+    "BUCKET_NAME":
+        BUCKET_NAME
 }
 
 for k, v in required_env.items():
@@ -130,6 +132,7 @@ bucket = storage.bucket(
     app=worker_app
 )
 
+ 
 # =========================================================
 # LINE API
 # =========================================================
@@ -870,14 +873,18 @@ def handle_image(event):
         # ====================================
         # REPLY
         # ====================================
-        clean_label = label_name.replace(".jpg","") #เอา .jpg ออก
+
+        clean_label = label_name.replace(
+            ".jpg",
+            ""
+        )
+
         reply_message(
 
             reply_token,
 
             f"บันทึกรูปสำเร็จ\n\n"
-            #f"LABEL: {label_name}\n"
-            f"LABEL: {clean_label}\n"
+            f"MODE: {clean_label}\n"
             f"ส่งรูปต่อได้เลย"
         )
 
@@ -1054,35 +1061,7 @@ def worker_webhook():
             "message": str(e)
 
         }), 500
-@app.route("/test-write", methods=["POST"])
-def test_write():
-    try:
-        body = request.get_json(silent=True) or {}
-
-        print("TEST WRITE BODY =", body)
-
-        user_id = body.get("user_id", "unknown")
-
-        # เขียนลง Firestore (worker DB)
-        worker_db.collection("test_data").document(user_id).set({
-            "user_id": user_id,
-            "message": body.get("message", ""),
-            "created_at": datetime.utcnow(),
-            "server_id": SERVER_ID
-        })
-
-        return jsonify({
-            "status": "success",
-            "message": "write to firestore ok"
-        })
-
-    except Exception as e:
-        traceback.print_exc()
-
-        return jsonify({
-            "status": "error",
-            "message": str(e)
-        }), 500
+ 
 # =========================================================
 # RUN
 # ======================================================
