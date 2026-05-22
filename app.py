@@ -593,9 +593,9 @@ def imagecolor(event, parts):
 
             reply_token,
 
-            f"บันทึกเรียบร้อย\n\n"
+            f"บันทึกเรียบร้อย\n"
             f"PROJECT: {project_name}\n"
-            f"LABEL: {label_name}\n\n"
+            f"class: {label_name}\n\n"
             f"ส่งรูปหมวด {label_name}"
         )
 
@@ -873,9 +873,9 @@ def handle_image(event):
 
             reply_token,
 
-            f"บันทึกรูปสำเร็จ\n\n"
-            f"{label_name}\n"
-            f"ส่งรูปต่อได้เลย"
+            f"บันทึกรูปสำเร็จ\n"
+            f"{project_name}\n"
+            f"ส่งรูปต่อไป"
         )
 
         return jsonify({
