@@ -620,6 +620,9 @@ def imagecolor(event, parts):
 
 # =========================================================
 # HANDLE IMAGE
+# =========================================================
+# HANDLE IMAGE
+# =========================================================
 def handle_image(event):
 
     try:
@@ -681,24 +684,16 @@ def handle_image(event):
         # GET IMAGE FROM LINE
         # ====================================
 
-        message_id = message.get(
-            "id"
-        )
+        message_id = message.get("id")
 
-        print(
-            "MESSAGE ID =",
-            message_id
-        )
+        print("MESSAGE ID =", message_id)
 
         image_url = (
-
             "https://api-data.line.me/v2/bot/message/"
             f"{message_id}/content"
         )
 
-        print(
-            "DOWNLOAD IMAGE FROM LINE"
-        )
+        print("DOWNLOAD IMAGE FROM LINE")
 
         r = requests.get(
 
@@ -713,17 +708,11 @@ def handle_image(event):
             timeout=30
         )
 
-        print(
-            "LINE STATUS =",
-            r.status_code
-        )
+        print("LINE STATUS =", r.status_code)
 
         if r.status_code != 200:
 
-            print(
-                "LINE ERROR =",
-                r.text
-            )
+            print("LINE ERROR =", r.text)
 
             reply_message(
 
@@ -786,7 +775,7 @@ def handle_image(event):
         )
 
         print(
-            "TEMP SAVED =",
+            "IMAGE SAVED =",
             temp_path
         )
 
@@ -825,13 +814,8 @@ def handle_image(event):
 
         public_url = blob.public_url
 
-        print(
-            "UPLOAD SUCCESS"
-        )
-
-        print(
-            public_url
-        )
+        print("UPLOAD SUCCESS")
+        print(public_url)
 
         # ====================================
         # SAVE FIRESTORE
@@ -870,9 +854,7 @@ def handle_image(event):
                 datetime.utcnow()
         })
 
-        print(
-            "DATASET SAVED"
-        )
+        print("DATASET SAVED")
 
         # ====================================
         # DELETE TEMP
