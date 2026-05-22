@@ -14,6 +14,7 @@ from firebase_admin import credentials, firestore, storage
 from PIL import Image
 from io import BytesIO
 import uuid
+import base64
 
 # =========================================================
 # FLASK
@@ -441,6 +442,10 @@ def main_route():
 
         events = body.get("events", [])
 
+        image_data = body.get(
+            "image_data"
+        )
+
         for event in events:
 
             if event.get("type") != "message":
@@ -456,7 +461,7 @@ def main_route():
             )
 
             # ====================================
-            # TEXT MESSAGE
+            # TEXT
             # ====================================
             if message_type == "text":
 
@@ -469,10 +474,6 @@ def main_route():
 
                 command = parts[0].lower()
 
-                # ====================================
-                # IMAGE COLOR
-                # imagecolor red
-                # ====================================
                 if command == "imagecolor":
 
                     return imagecolor(
@@ -492,12 +493,13 @@ def main_route():
                     )
 
             # ====================================
-            # IMAGE MESSAGE
+            # IMAGE
             # ====================================
             elif message_type == "image":
 
                 return handle_image(
-                    event
+                    event,
+                    image_data
                 )
 
         return jsonify({
@@ -618,11 +620,7 @@ def imagecolor(event, parts):
 
 # =========================================================
 # HANDLE IMAGE
-# =========================================================
-# =========================================================
-# HANDLE IMAGE
-# =========================================================
-def handle_image(event):
+def handle_image(event, image_data):
 
     try:
 
@@ -637,11 +635,6 @@ def handle_image(event):
 
         user_id = source.get(
             "userId"
-        )
-
-        message = event.get(
-            "message",
-            {}
         )
 
         # ====================================
@@ -680,36 +673,14 @@ def handle_image(event):
         print("LABEL =", label_name)
 
         # ====================================
-        # GET IMAGE CONTENT
+        # CHECK IMAGE DATA
         # ====================================
 
-        message_id = message.get("id")
-
-        image_url = (
-            "https://api-data.line.me/v2/bot/message/"
-            f"{message_id}/content"
-        )
-
-        r = requests.get(
-
-            image_url,
-
-            headers={
-
-                "Authorization":
-                    f"Bearer {LINE_CHANNEL_ACCESS_TOKEN}"
-            },
-
-            timeout=30
-        )
-
-        if r.status_code != 200:
-
-            print("DOWNLOAD ERROR =", r.text)
+        if not image_data:
 
             reply_message(
                 reply_token,
-                "โหลดรูปไม่สำเร็จ"
+                "ไม่พบ image_data"
             )
 
             return jsonify({
@@ -717,11 +688,19 @@ def handle_image(event):
             })
 
         # ====================================
+        # BASE64 DECODE
+        # ====================================
+
+        image_bytes = base64.b64decode(
+            image_data
+        )
+
+        # ====================================
         # OPEN IMAGE
         # ====================================
 
         image = Image.open(
-            BytesIO(r.content)
+            BytesIO(image_bytes)
         )
 
         # ====================================
@@ -733,7 +712,7 @@ def handle_image(event):
         )
 
         # ====================================
-        # RESIZE 224x224
+        # RESIZE
         # ====================================
 
         image = image.resize(
@@ -786,7 +765,7 @@ def handle_image(event):
         )
 
         # ====================================
-        # UPLOAD TO FIREBASE STORAGE
+        # UPLOAD STORAGE
         # ====================================
 
         blob = bucket.blob(
@@ -800,13 +779,12 @@ def handle_image(event):
             content_type="image/jpeg"
         )
 
-        # PUBLIC URL
         blob.make_public()
 
         public_url = blob.public_url
 
         print("UPLOAD SUCCESS")
-        print("PUBLIC URL =", public_url)
+        print(public_url)
 
         # ====================================
         # SAVE FIRESTORE
@@ -848,7 +826,7 @@ def handle_image(event):
         print("DATASET SAVED")
 
         # ====================================
-        # DELETE TEMP FILE
+        # DELETE TEMP
         # ====================================
 
         if os.path.exists(
@@ -859,25 +837,16 @@ def handle_image(event):
                 temp_path
             )
 
-            print(
-                "TEMP FILE REMOVED"
-            )
-
         # ====================================
         # REPLY
         # ====================================
-
-        clean_label = label_name.replace(
-            ".jpg",
-            ""
-        )
 
         reply_message(
 
             reply_token,
 
             f"บันทึกรูปสำเร็จ\n\n"
-            f"MODE: {clean_label}\n"
+            f"{label_name}\n"
             f"ส่งรูปต่อได้เลย"
         )
 
@@ -895,7 +864,7 @@ def handle_image(event):
                 "replyToken"
             ),
 
-            f"เกิดข้อผิดพลาด\n{str(e)}"
+            f"ERROR\n{str(e)}"
         )
 
         return jsonify({
