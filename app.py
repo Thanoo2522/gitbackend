@@ -10,9 +10,11 @@ import threading
 from datetime import datetime
 
 import firebase_admin
-from firebase_admin import credentials, firestore,storage
+from firebase_admin import credentials, firestore, storage
+
 from PIL import Image
 from io import BytesIO
+
 import uuid
 
 # =========================================================
@@ -20,12 +22,6 @@ import uuid
 # =========================================================
 app = Flask(__name__)
 
-#=======================================================
-cred = credentials.Certificate("serviceAccount.json")
-firebase_admin.initialize_app(cred, {
-    'storageBucket': 'basework-51f3b.appspot.com'
-})
-bucket = storage.bucket()
 # =========================================================
 # HEARTBEAT STATE
 # =========================================================
@@ -53,6 +49,11 @@ SERVER_ID = os.environ.get(
 WORKER_WEBHOOK_URL = os.environ.get(
     "WORKER_WEBHOOK_URL"
 )
+
+# =========================================================
+# STORAGE
+# =========================================================
+BUCKET_NAME = "basework-51f3b.appspot.com"
 
 # =========================================================
 # VALIDATION
@@ -84,29 +85,50 @@ for k, v in required_env.items():
 # FIREBASE
 # =========================================================
 
+# ---------------------------------------------------------
 # HUB DB
+# ---------------------------------------------------------
 hub_cred = credentials.Certificate(
     json.loads(HUB_FIREBASE_KEY)
 )
 
 hub_app = firebase_admin.initialize_app(
+
     hub_cred,
+
     name="hub"
 )
 
-hub_db = firestore.client(hub_app)
+hub_db = firestore.client(
+    hub_app
+)
 
-# WORKER DB
+# ---------------------------------------------------------
+# WORKER DB + STORAGE
+# ---------------------------------------------------------
 worker_cred = credentials.Certificate(
     json.loads(WORKER_FIREBASE_KEY)
 )
 
 worker_app = firebase_admin.initialize_app(
+
     worker_cred,
+
+    {
+        "storageBucket":
+            BUCKET_NAME
+    },
+
     name="worker"
 )
 
-worker_db = firestore.client(worker_app)
+worker_db = firestore.client(
+    worker_app
+)
+
+bucket = storage.bucket(
+    app=worker_app
+)
 
 # =========================================================
 # LINE API
