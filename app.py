@@ -442,9 +442,7 @@ def main_route():
 
         events = body.get("events", [])
 
-        image_data = body.get(
-            "image_data"
-        )
+ 
 
         for event in events:
 
@@ -498,9 +496,8 @@ def main_route():
             elif message_type == "image":
 
                 return handle_image(
-                    event,
-                    image_data
-                )
+                     event
+                     )
 
         return jsonify({
             "status": "success"
