@@ -277,7 +277,79 @@ def check_register():
 # =========================================================
 # REGISTER USER
 # =========================================================
- 
+@app.route("/register-user", methods=["POST"])
+def register_user():
+
+    try:
+
+        body = request.get_json(
+            silent=True
+        ) or {}
+
+        print("REGISTER BODY =", body)
+
+        user_id = body.get("user_id")
+
+        if not user_id:
+
+            return jsonify({
+
+                "status": "error",
+
+                "message": "no user_id"
+
+            }), 400
+
+        # ====================================
+        # SAVE USER
+        # ====================================
+
+        worker_db.collection("user") \
+            .document(user_id) \
+            .set({
+
+                "userId":
+                    user_id,
+
+                "fullname":
+                    body.get("name", ""),
+
+                "phone":
+                    body.get("phone", ""),
+
+                "email":
+                    body.get("email", ""),
+
+                "register":
+                    True,
+
+                "worker_id":
+                    SERVER_ID,
+
+                "created_at":
+                    datetime.utcnow()
+            })
+
+        print("✅ USER SAVED")
+
+        return jsonify({
+
+            "status": "success",
+
+            "message": "ลงทะเบียนสำเร็จ"
+        })
+
+    except Exception as e:
+
+        traceback.print_exc()
+
+        return jsonify({
+
+            "status": "error",
+
+            "message": str(e)
+
+        }), 500
 
 # =========================================================
 # LINE HELPERS
@@ -831,7 +903,152 @@ def handle_image(event):
 
         }), 500
 # =========================================================
- 
+@app.route("/worker-webhook", methods=["POST"])
+def worker_webhook():
+
+    try:
+
+        body = request.get_json(
+            silent=True
+        ) or {}
+
+        print("=" * 50)
+        print("WORKER WEBHOOK")
+        print(json.dumps(
+            body,
+            indent=2,
+            ensure_ascii=False
+        ))
+        print("=" * 50)
+
+        events = body.get("events", [])
+
+        for event in events:
+
+            event_type = event.get("type")
+
+            reply_token = event.get(
+                "replyToken"
+            )
+
+            source = event.get(
+                "source",
+                {}
+            )
+
+            user_id = source.get(
+                "userId"
+            )
+
+            if not user_id:
+                continue
+
+            # ====================================
+            # GET USER
+            # ====================================
+
+            user_doc = worker_db.collection("user") \
+                .document(user_id) \
+                .get()
+
+            if not user_doc.exists:
+                continue
+
+            user_data = user_doc.to_dict()
+
+            fullname = user_data.get(
+                "fullname",
+                "Unknown"
+            )
+
+            # ====================================
+            # MESSAGE EVENT
+            # ====================================
+
+            if event_type == "message":
+
+                text = event.get(
+                    "message",
+                    {}
+                ).get(
+                    "text",
+                    ""
+                )
+
+                print("TEXT =", text)
+
+                # SAVE CHAT LOG
+                worker_db.collection("chat_logs") \
+                    .add({
+
+                        "user_id":
+                            user_id,
+
+                        "fullname":
+                            fullname,
+
+                        "text":
+                            text,
+
+                        "timestamp":
+                            datetime.utcnow()
+                    })
+
+                # COMMANDS
+                if text.lower() == "ping":
+
+                    reply_message(
+                        reply_token,
+                        "pong"
+                    )
+
+                elif text.lower() == "profile":
+
+                    reply_message(
+
+                        reply_token,
+
+                        f"ชื่อ: {fullname}\n"
+                        f"USER: {user_id}\n"
+                        f"WORKER: {SERVER_ID}"
+                    )
+
+                else:
+
+                    reply_message(
+
+                        reply_token,
+
+                        f"สวัสดี {fullname}\n\n"
+                        f"คุณพิมพ์: {text}"
+                    )
+
+            # ====================================
+            # FOLLOW EVENT
+            # ====================================
+
+            elif event_type == "follow":
+
+                push_message(
+                    user_id,
+                    "ยินดีต้อนรับ"
+                )
+
+        return jsonify({
+            "status": "success"
+        })
+
+    except Exception as e:
+
+        traceback.print_exc()
+
+        return jsonify({
+
+            "status": "error",
+
+            "message": str(e)
+
+        }), 500 
  
 # =========================================================
 # RUN
