@@ -994,6 +994,16 @@ def handle_image(event):
 
         print("DATASET SAVED")
 
+         # ====================================
+       # COUNT IMAGES IN CLASS
+       # ====================================
+
+        dataset_docs = worker_db.collection(project_name ).document(label_name ).collection("dataset" ).get()
+
+        total_images = len( dataset_docs )
+
+        print("TOTAL IMAGES =",total_images)
+
         # ====================================
         # DELETE TEMP
         # ====================================
@@ -1003,7 +1013,7 @@ def handle_image(event):
         ):
 
             os.remove(
-                temp_path
+                temp_path  
             )
 
         # ====================================
@@ -1012,12 +1022,10 @@ def handle_image(event):
 
         reply_message(
 
-            reply_token,
-
-            f"บันทึกรูปสำเร็จ\n"
-            f"class:{label_name}\n"
-            f"ส่งรูปต่อไป"
-        )
+                       reply_token, f"บันทึกรูปสำเร็จ class: {label_name}\n"
+                                    f"จำนวนรูป: {total_images}\n"
+                                    f"ส่งรูปต่อไปใน class: {label_name}"
+                          )
 
         return jsonify({
             "status": "success"
