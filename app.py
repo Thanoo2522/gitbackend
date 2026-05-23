@@ -16,7 +16,7 @@ from PIL import Image
 from io import BytesIO
 import uuid
 import base64
-
+import zipfile
 # =========================================================
 # FLASK
 # =========================================================
@@ -495,7 +495,9 @@ def main_route():
                         event,
                         parts
                     )
+                elif command == "download":
 
+                     return download_dataset( event, parts )                   
                 # ====================================
                 # UNKNOWN COMMAND
                 # ====================================
@@ -756,6 +758,231 @@ def imagenumber(event, parts):
             "message": str(e)
 
         }), 500
+# =========================================================
+# DOWNLOAD DATASET
+# download imagecolor red
+# =========================================================
+def download_dataset(event, parts):
+
+    try:
+
+        reply_token = event.get(
+            "replyToken"
+        )
+
+        # ====================================
+        # VALIDATE
+        # ====================================
+
+        if len(parts) < 3:
+
+            reply_message(
+
+                reply_token,
+
+                "รูปแบบ:\n"
+                "download imagecolor red"
+            )
+
+            return jsonify({
+                "status": "error"
+            })
+
+        # ====================================
+        # GET PROJECT / LABEL
+        # ====================================
+
+        project_name = parts[1].lower()
+
+        label_name = parts[2].lower()
+
+        print("DOWNLOAD PROJECT =", project_name)
+        print("DOWNLOAD LABEL =", label_name)
+
+        # ====================================
+        # STORAGE PREFIX
+        # ====================================
+
+        storage_prefix = (
+            f"{project_name}/"
+            f"{label_name}/"
+        )
+
+        print(
+            "PREFIX =",
+            storage_prefix
+        )
+
+        # ====================================
+        # GET FILES FROM STORAGE
+        # ====================================
+
+        blobs = list(
+
+            bucket.list_blobs(
+                prefix=storage_prefix
+            )
+        )
+
+        if len(blobs) == 0:
+
+            reply_message(
+
+                reply_token,
+
+                "ไม่พบ dataset"
+            )
+
+            return jsonify({
+                "status": "error"
+            })
+
+        print(
+            "TOTAL FILES =",
+            len(blobs)
+        )
+
+        # ====================================
+        # ZIP FILE
+        # ====================================
+
+        zip_filename = (
+            f"{project_name}_{label_name}.zip"
+        )
+
+        zip_temp_path = (
+            f"/tmp/{zip_filename}"
+        )
+
+        with zipfile.ZipFile(
+
+            zip_temp_path,
+
+            "w",
+
+            zipfile.ZIP_DEFLATED
+
+        ) as zipf:
+
+            for blob in blobs:
+
+                filename = os.path.basename(
+                    blob.name
+                )
+
+                if not filename:
+                    continue
+
+                temp_file = (
+                    f"/tmp/{filename}"
+                )
+
+                # DOWNLOAD FROM STORAGE
+                blob.download_to_filename(
+                    temp_file
+                )
+
+                # ADD ZIP
+                zipf.write(
+
+                    temp_file,
+
+                    arcname=filename
+                )
+
+                # DELETE TEMP
+                if os.path.exists(
+                    temp_file
+                ):
+                    os.remove(
+                        temp_file
+                    )
+
+        print(
+            "ZIP CREATED =",
+            zip_temp_path
+        )
+
+        # ====================================
+        # UPLOAD ZIP
+        # ====================================
+
+        zip_storage_path = (
+            f"downloads/"
+            f"{zip_filename}"
+        )
+
+        zip_blob = bucket.blob(
+            zip_storage_path
+        )
+
+        zip_blob.upload_from_filename(
+
+            zip_temp_path,
+
+            content_type="application/zip"
+        )
+
+        zip_blob.make_public()
+
+        zip_url = zip_blob.public_url
+
+        print(
+            "ZIP URL =",
+            zip_url
+        )
+
+        # ====================================
+        # DELETE ZIP TEMP
+        # ====================================
+
+        if os.path.exists(
+            zip_temp_path
+        ):
+
+            os.remove(
+                zip_temp_path
+            )
+
+        # ====================================
+        # REPLY
+        # ====================================
+
+        reply_message(
+
+            reply_token,
+
+            f"DOWNLOAD READY\n\n"
+            f"PROJECT: {project_name}\n"
+            f"CLASS: {label_name}\n"
+            f"FILES: {len(blobs)}\n\n"
+            f"{zip_url}"
+        )
+
+        return jsonify({
+            "status": "success"
+        })
+
+    except Exception as e:
+
+        traceback.print_exc()
+
+        reply_message(
+
+            event.get(
+                "replyToken"
+            ),
+
+            f"DOWNLOAD ERROR\n{str(e)}"
+        )
+
+        return jsonify({
+
+            "status": "error",
+
+            "message": str(e)
+
+        }), 500        
 # =========================================================
 # HANDLE IMAGE
 # =========================================================
