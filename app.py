@@ -1,3 +1,4 @@
+from click import command
 from flask import Flask, request, jsonify
 
 import os
@@ -440,9 +441,10 @@ def main_route():
         ))
         print("=" * 50)
 
-        events = body.get("events", [])
-
- 
+        events = body.get(
+            "events",
+            []
+        )
 
         for event in events:
 
@@ -459,7 +461,7 @@ def main_route():
             )
 
             # ====================================
-            # TEXT
+            # TEXT MESSAGE
             # ====================================
             if message_type == "text":
 
@@ -472,6 +474,10 @@ def main_route():
 
                 command = parts[0].lower()
 
+                # ====================================
+                # IMAGE COLOR
+                # imagecolor red
+                # ====================================
                 if command == "imagecolor":
 
                     return imagecolor(
@@ -479,6 +485,20 @@ def main_route():
                         parts
                     )
 
+                # ====================================
+                # IMAGE NUMBER
+                # imagenumber 5
+                # ====================================
+                elif command == "imagenumber":
+
+                    return imagenumber(
+                        event,
+                        parts
+                    )
+
+                # ====================================
+                # UNKNOWN COMMAND
+                # ====================================
                 else:
 
                     reply_message(
@@ -491,13 +511,13 @@ def main_route():
                     )
 
             # ====================================
-            # IMAGE
+            # IMAGE MESSAGE
             # ====================================
             elif message_type == "image":
 
                 return handle_image(
-                     event
-                     )
+                    event
+                )
 
         return jsonify({
             "status": "success"
@@ -614,7 +634,128 @@ def imagecolor(event, parts):
             "message": str(e)
 
         }), 500
+# =========================================================
+# IMAGE NUMBER
+# imagenumber  
+# =========================================================
+def imagenumber(event, parts):
 
+    try:
+
+        reply_token = event.get(
+            "replyToken"
+        )
+
+        source = event.get(
+            "source",
+            {}
+        )
+
+        user_id = source.get(
+            "userId"
+        )
+
+        # ====================================
+        # VALIDATE
+        # ====================================
+
+        if len(parts) < 2:
+
+            reply_message(
+
+                reply_token,
+
+                "รูปแบบ:\n"
+                "imagenumber 5"
+            )
+
+            return jsonify({
+                "status": "error"
+            })
+
+        # ====================================
+        # GET LABEL
+        # ====================================
+
+        label_name = parts[1].strip()
+
+        # ====================================
+        # CHECK NUMBER
+        # ====================================
+
+        if not label_name.isdigit():
+
+            reply_message(
+
+                reply_token,
+
+                "label ต้องเป็นตัวเลข\n"
+                "เช่น:\n"
+                "imagenumber 5"
+            )
+
+            return jsonify({
+                "status": "error"
+            })
+
+        # ====================================
+        # PROJECT
+        # ====================================
+
+        project_name = "imagenumber"
+
+        # ====================================
+        # SAVE SESSION
+        # ====================================
+
+        worker_db.collection(
+            "dataset_session"
+        ).document(user_id).set({
+
+            "mode":
+                "imagenumber",
+
+            "project":
+                project_name,
+
+            "label":
+                label_name,
+
+            "updated_at":
+                datetime.utcnow()
+        })
+
+        print("NUMBER SESSION SAVED")
+
+        # ====================================
+        # REPLY
+        # ====================================
+
+        reply_message(
+
+            reply_token,
+
+            f"บันทึกเรียบร้อย\n"
+            f"PROJECT: {project_name}\n"
+            f"class: {label_name}\n\n"
+            f"ส่งรูปเลข {label_name}"
+        )
+
+        return jsonify({
+            "status": "success"
+        })
+
+    except Exception as e:
+
+        traceback.print_exc()
+
+        return jsonify({
+
+            "status": "error",
+
+            "message": str(e)
+
+        }), 500
 # =========================================================
 # HANDLE IMAGE
 # =========================================================
@@ -874,7 +1015,7 @@ def handle_image(event):
             reply_token,
 
             f"บันทึกรูปสำเร็จ\n"
-            f"{project_name}\n"
+            f"class:{label_name}\n"
             f"ส่งรูปต่อไป"
         )
 
