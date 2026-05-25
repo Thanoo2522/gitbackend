@@ -22,6 +22,7 @@ video{
     width:95%;
     max-width:500px;
     border-radius:20px;
+    background:black;
 }
 
 #result{
@@ -41,7 +42,8 @@ video{
 <video
     id="video"
     autoplay
-    playsinline>
+    playsinline
+    muted>
 </video>
 
 <canvas
@@ -57,7 +59,19 @@ video{
 
 <script>
 
+// =====================================================
+// CONFIG
+// =====================================================
+
+const API_URL =
+"https://gitbackend-416424538655.asia-southeast3.run.app"
+
+// =====================================================
+// PARAMS
+// =====================================================
+
 const params =
+
     new URLSearchParams(
         window.location.search
     )
@@ -65,7 +79,14 @@ const params =
 const project =
     params.get("project")
 
-console.log(project)
+console.log(
+    "PROJECT =",
+    project
+)
+
+// =====================================================
+// ELEMENTS
+// =====================================================
 
 const video =
     document.getElementById("video")
@@ -76,33 +97,83 @@ const canvas =
 const ctx =
     canvas.getContext("2d")
 
+const resultDiv =
+    document.getElementById("result")
+
 // =====================================================
 // CAMERA
 // =====================================================
 
 async function startCamera(){
 
-    const stream =
+    try{
 
-        await navigator
-        .mediaDevices
-        .getUserMedia({
+        const stream =
 
-            video:{
-                facingMode:"environment"
-            },
+            await navigator
+            .mediaDevices
+            .getUserMedia({
 
-            audio:false
-        })
+                video:{
+                    facingMode:"environment"
+                },
 
-    video.srcObject = stream
+                audio:false
+            })
+
+        video.srcObject = stream
+
+        // wait video ready
+
+        await new Promise(
+
+            (resolve)=>{
+
+                video.onloadedmetadata =
+                    ()=>{
+
+                        resolve()
+                    }
+            }
+        )
+
+        await video.play()
+
+        console.log("CAMERA READY")
+
+    }catch(e){
+
+        console.log(
+            "CAMERA ERROR",
+            e
+        )
+
+        resultDiv.innerHTML =
+            "camera error"
+    }
 }
 
 // =====================================================
 // SEND FRAME
 // =====================================================
 
+let sending = false
+
 async function sendFrame(){
+
+    // prevent spam
+
+    if(sending){
+        return
+    }
+
+    // wait video ready
+
+    if(video.readyState < 2){
+        return
+    }
+
+    sending = true
 
     try{
 
@@ -115,62 +186,79 @@ async function sendFrame(){
             224
         )
 
-        canvas.toBlob(
+        const blob = await new Promise(
 
-            async(blob)=>{
+            resolve =>
 
-                const formData =
-                    new FormData()
+                canvas.toBlob(
 
-                formData.append(
-                    "image",
-                    blob,
-                    "frame.jpg"
+                    resolve,
+
+                    "image/jpeg",
+
+                    0.7
                 )
-
-                formData.append(
-                    "project",
-                    project
-                )
-
-                const r = await fetch(
-
-                    "/predict",
-
-                    {
-                        method:"POST",
-                        body:formData
-                    }
-                )
-
-                const data =
-                    await r.json()
-
-                console.log(data)
-
-                document.getElementById(
-                    "result"
-                ).innerHTML =
-
-                    data.label
-                    +
-                    "<br>"
-                    +
-                    Math.round(
-                        data.confidence * 100
-                    )
-                    +
-                    "%"
-
-            },
-
-            "image/jpeg",
-            0.7
         )
+
+        const formData =
+            new FormData()
+
+        formData.append(
+            "image",
+            blob,
+            "frame.jpg"
+        )
+
+        formData.append(
+            "project",
+            project
+        )
+
+        const r = await fetch(
+
+            API_URL + "/predict",
+
+            {
+                method:"POST",
+                body:formData
+            }
+        )
+
+        const data =
+            await r.json()
+
+        console.log(data)
+
+        if(data.status === "success"){
+
+            resultDiv.innerHTML =
+
+                data.label
+                +
+                "<br>"
+                +
+                Math.round(
+                    data.confidence * 100
+                )
+                +
+                "%"
+
+        }else{
+
+            resultDiv.innerHTML =
+                data.message
+        }
 
     }catch(e){
 
-        console.log(e)
+        console.log(
+            "SEND ERROR",
+            e
+        )
+
+    }finally{
+
+        sending = false
     }
 }
 
@@ -180,20 +268,40 @@ async function sendFrame(){
 
 async function init(){
 
-    await liff.init({
+    try{
 
-        liffId:"2010144029-njNgt99E"
-    })
+        await liff.init({
 
-    await startCamera()
+            liffId:"2010144029-njNgt99E"
+        })
 
-    // 2 FPS
-    setInterval(
+        console.log("LIFF READY")
 
-        sendFrame,
+        await startCamera()
 
-        500
-    )
+        resultDiv.innerHTML =
+            "AI READY"
+
+        // 1 FPS ก่อน
+        // ลดโหลด Cloud Run
+
+        setInterval(
+
+            sendFrame,
+
+            1000
+        )
+
+    }catch(e){
+
+        console.log(
+            "INIT ERROR",
+            e
+        )
+
+        resultDiv.innerHTML =
+            "init error"
+    }
 }
 
 init()
