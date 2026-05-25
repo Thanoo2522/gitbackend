@@ -436,12 +436,6 @@ models = {
 
         tf.keras.models.load_model(
             "models/imagenumber.h5"
-        ),
-
-    "imagecolor":
-
-        tf.keras.models.load_model(
-            "models/imagecolor.h5"
         )
 }
 
@@ -451,12 +445,6 @@ labels = {
 
         "1",
         "2"
-    ],
-
-    "imagecolor":[
-
-        "red",
-        "blue"
     ]
 }
 

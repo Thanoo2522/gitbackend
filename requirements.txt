@@ -4,3 +4,8 @@ requests
 Pillow
 firebase-admin
 werkzeug
+tensorflow
+numpy
+ 
+ 
+ 
