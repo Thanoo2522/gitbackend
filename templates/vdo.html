@@ -7,50 +7,116 @@
 
 <title>Realtime AI</title>
 
+<meta
+    name="viewport"
+    content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+
 <script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
 
 <style>
 
+html,
 body{
 
     margin:0;
-    padding:20px;
+    padding:0;
+
+    width:100%;
+    height:100%;
+
+    overflow:hidden;
+
+    background:black;
 
     font-family:Arial;
-
-    text-align:center;
-
-    background:white;
-
-    color:black;
-}
-
-h2{
-
-    margin-bottom:20px;
 }
 
 #preview{
 
-    width:95%;
-    max-width:500px;
+    position:fixed;
 
-    border-radius:20px;
+    top:0;
+    left:0;
+
+    width:100vw;
+    height:100vh;
 
     background:black;
+
+    object-fit:cover;
 }
 
-button{
+#overlay{
 
-    margin-top:20px;
+    position:fixed;
 
-    padding:15px 30px;
+    top:0;
+    left:0;
 
-    font-size:20px;
+    width:100%;
+    height:100%;
+
+    pointer-events:none;
+}
+
+#result{
+
+    position:absolute;
+
+    bottom:40px;
+
+    left:50%;
+
+    transform:translateX(-50%);
+
+    font-size:70px;
+
+    font-weight:bold;
+
+    color:#00ff00;
+
+    text-shadow:
+        0 0 10px black,
+        0 0 20px black;
+
+    text-align:center;
+}
+
+#debug{
+
+    position:absolute;
+
+    top:20px;
+
+    left:20px;
+
+    color:white;
+
+    font-size:18px;
+
+    text-shadow:
+        0 0 5px black;
+}
+
+#startBtn{
+
+    position:fixed;
+
+    z-index:9999;
+
+    top:50%;
+
+    left:50%;
+
+    transform:translate(-50%, -50%);
+
+    padding:20px 40px;
+
+    font-size:30px;
 
     border:none;
 
-    border-radius:15px;
+    border-radius:20px;
 
     background:#06c755;
 
@@ -59,33 +125,11 @@ button{
     cursor:pointer;
 }
 
-#result{
-
-    margin-top:20px;
-
-    font-size:40px;
-
-    font-weight:bold;
-}
-
-#debug{
-
-    margin-top:20px;
-
-    font-size:16px;
-
-    color:gray;
-
-    word-break:break-all;
-}
-
 </style>
 
 </head>
 
 <body>
-
-<h2>Realtime AI</h2>
 
 <!-- ========================================= -->
 <!-- HIDDEN VIDEO -->
@@ -108,7 +152,7 @@ button{
 </video>
 
 <!-- ========================================= -->
-<!-- PREVIEW -->
+<!-- FULLSCREEN PREVIEW -->
 <!-- ========================================= -->
 
 <canvas
@@ -122,12 +166,34 @@ button{
 </canvas>
 
 <!-- ========================================= -->
+<!-- OVERLAY -->
+<!-- ========================================= -->
+
+<div id="overlay">
+
+    <div id="debug">
+
+        waiting...
+
+    </div>
+
+    <div id="result">
+
+        loading...
+
+    </div>
+
+</div>
+
+<!-- ========================================= -->
 <!-- START BUTTON -->
 <!-- ========================================= -->
 
-<br>
+<button
 
-<button onclick="init()">
+    id="startBtn"
+
+    onclick="init()">
 
     START AI
 
@@ -148,26 +214,6 @@ button{
     style="display:none;">
 
 </canvas>
-
-<!-- ========================================= -->
-<!-- RESULT -->
-<!-- ========================================= -->
-
-<div id="result">
-
-    loading...
-
-</div>
-
-<!-- ========================================= -->
-<!-- DEBUG -->
-<!-- ========================================= -->
-
-<div id="debug">
-
-    debug...
-
-</div>
 
 <script>
 
@@ -234,6 +280,10 @@ const debugDiv =
 
     document.getElementById("debug")
 
+const startBtn =
+
+    document.getElementById("startBtn")
+
 let sending = false
 
 // =====================================================
@@ -247,10 +297,6 @@ async function startCamera(){
         debugDiv.innerHTML =
             "requesting camera..."
 
-        // =====================================
-        // GET CAMERA
-        // =====================================
-
         const stream =
 
             await navigator
@@ -258,78 +304,23 @@ async function startCamera(){
             .getUserMedia({
 
                 video:{
-                    facingMode:"user"
+                    facingMode:"environment"
                 },
 
                 audio:false
             })
 
-        console.log(
-            "STREAM =",
-            stream
-        )
-
-        debugDiv.innerHTML =
-            "camera granted"
-
-        // =====================================
-        // VIDEO SETTINGS
-        // =====================================
-
         video.srcObject = stream
 
         video.muted = true
 
-        video.autoplay = true
-
-        video.playsInline = true
-
-        video.setAttribute(
-            "playsinline",
-            true
-        )
-
-        video.setAttribute(
-            "webkit-playsinline",
-            true
-        )
-
-        // =====================================
-        // WAIT METADATA
-        // =====================================
-
-        await new Promise(
-
-            resolve=>{
-
-                video.onloadedmetadata =
-                    ()=>{
-
-                        resolve()
-                    }
-            }
-        )
-
-        debugDiv.innerHTML =
-            "metadata loaded"
-
-        // =====================================
-        // PLAY VIDEO
-        // =====================================
-
         await video.play()
-
-        console.log(
-            "VIDEO PLAYING"
-        )
 
         debugDiv.innerHTML =
 
             "camera success"
             +
-            "<br><br>"
-            +
-            "VIDEO SIZE = "
+            "<br>"
             +
             video.videoWidth
             +
@@ -339,10 +330,7 @@ async function startCamera(){
 
     }catch(e){
 
-        console.log(
-            "CAMERA ERROR",
-            e
-        )
+        console.log(e)
 
         debugDiv.innerHTML =
 
@@ -363,11 +351,11 @@ async function startCamera(){
 
 function startPreview(){
 
-    setInterval(
+    function draw(){
 
-        ()=>{
+        try{
 
-            if(video.readyState >= 2){
+            if(video.readyState === 4){
 
                 previewCtx.drawImage(
 
@@ -377,16 +365,24 @@ function startPreview(){
 
                     0,
 
-                    640,
+                    preview.width,
 
-                    480
+                    preview.height
                 )
             }
 
-        },
+        }catch(e){
 
-        30
-    )
+            console.log(
+                "PREVIEW ERROR",
+                e
+            )
+        }
+
+        requestAnimationFrame(draw)
+    }
+
+    draw()
 }
 
 // =====================================================
@@ -395,17 +391,9 @@ function startPreview(){
 
 async function sendFrame(){
 
-    // =========================================
-    // PREVENT SPAM
-    // =========================================
-
     if(sending){
         return
     }
-
-    // =========================================
-    // VIDEO READY
-    // =========================================
 
     if(video.readyState < 2){
         return
@@ -414,10 +402,6 @@ async function sendFrame(){
     sending = true
 
     try{
-
-        // =====================================
-        // DRAW IMAGE
-        // =====================================
 
         ctx.drawImage(
 
@@ -431,10 +415,6 @@ async function sendFrame(){
 
             224
         )
-
-        // =====================================
-        // TO BLOB
-        // =====================================
 
         const blob =
 
@@ -452,55 +432,34 @@ async function sendFrame(){
                     )
             )
 
-        // =====================================
-        // FORM DATA
-        // =====================================
-
         const formData =
-
             new FormData()
 
         formData.append(
-
             "image",
-
             blob,
-
             "frame.jpg"
         )
 
         formData.append(
-
             "project",
-
             project
         )
-
-        // =====================================
-        // FETCH
-        // =====================================
 
         const r = await fetch(
 
             API_URL + "/predict",
 
             {
-
                 method:"POST",
-
                 body:formData
             }
         )
 
         const data =
-
             await r.json()
 
         console.log(data)
-
-        // =====================================
-        // RESULT
-        // =====================================
 
         if(data.status === "success"){
 
@@ -519,7 +478,6 @@ async function sendFrame(){
         }else{
 
             resultDiv.innerHTML =
-
                 data.message
         }
 
@@ -549,6 +507,9 @@ async function init(){
 
     try{
 
+        startBtn.style.display =
+            "none"
+
         debugDiv.innerHTML =
             "LIFF INIT..."
 
@@ -562,7 +523,7 @@ async function init(){
         })
 
         // =====================================
-        // OPEN EXTERNAL BROWSER
+        // EXTERNAL BROWSER
         // =====================================
 
         if(liff.isInClient()){
@@ -590,13 +551,10 @@ async function init(){
         await startCamera()
 
         // =====================================
-        // START PREVIEW
+        // PREVIEW
         // =====================================
 
         startPreview()
-
-        resultDiv.innerHTML =
-            "AI READY"
 
         // =====================================
         // AI LOOP
