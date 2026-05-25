@@ -27,14 +27,243 @@ import tensorflow as tf
 app = Flask(__name__)
 
 # =========================================================
-# LOAD AI MODEL
 # =========================================================
-# =========================================================
-# LOAD AI MODELS
+# MODELS
 # =========================================================
 
+models = {}
 
+# =========================================================
+# LABELS
+# =========================================================
 
+labels = {
+
+    "imagenumber": [
+
+        "1",
+        "2"
+    ]
+}
+
+print("LABELS LOADED")
+
+# =========================================================
+# LOAD MODEL (LAZY LOAD)
+# =========================================================
+
+def get_model(project):
+
+    # ====================================
+    # MODEL ALREADY LOADED
+    # ====================================
+
+    if project in models:
+
+        print(f"{project} model already loaded")
+
+        return models[project]
+
+    # ====================================
+    # LOAD NEW MODEL
+    # ====================================
+
+    print("=" * 50)
+    print(f"LOADING MODEL : {project}")
+    print("=" * 50)
+
+    model_path = f"models/{project}.h5"
+
+    print("MODEL PATH =", model_path)
+
+    # ====================================
+    # CHECK FILE
+    # ====================================
+
+    if not os.path.exists(model_path):
+
+        raise Exception(
+            f"Model file not found : {model_path}"
+        )
+
+    # ====================================
+    # LOAD MODEL
+    # ====================================
+
+    model = tf.keras.models.load_model(
+        model_path
+    )
+
+    models[project] = model
+
+    print(f"{project} model loaded success")
+
+    return model
+
+# =========================================================
+# PREDICT
+# =========================================================
+
+@app.route("/predict", methods=["POST"])
+def predict():
+
+    try:
+
+        # ====================================
+        # CHECK IMAGE
+        # ====================================
+
+        if "image" not in request.files:
+
+            return jsonify({
+
+                "status":
+                    "error",
+
+                "message":
+                    "No image uploaded"
+
+            }), 400
+
+        # ====================================
+        # GET DATA
+        # ====================================
+
+        file = request.files["image"]
+
+        project = request.form.get(
+            "project"
+        )
+
+        print("=" * 50)
+        print("PREDICT REQUEST")
+        print("=" * 50)
+
+        print(
+            "PROJECT =",
+            project
+        )
+
+        # ====================================
+        # CHECK PROJECT
+        # ====================================
+
+        if not project:
+
+            return jsonify({
+
+                "status":
+                    "error",
+
+                "message":
+                    "Project is required"
+
+            }), 400
+
+        # ====================================
+        # CHECK LABELS
+        # ====================================
+
+        if project not in labels:
+
+            return jsonify({
+
+                "status":
+                    "error",
+
+                "message":
+                    f"Unknown project : {project}"
+
+            }), 400
+
+        # ====================================
+        # LOAD MODEL
+        # ====================================
+
+        model = get_model(project)
+
+        class_names = labels[project]
+
+        # ====================================
+        # IMAGE PROCESS
+        # ====================================
+
+        image = Image.open(
+            file.stream
+        )
+
+        image = image.convert("RGB")
+
+        image = image.resize(
+            (224, 224)
+        )
+
+        img_array = np.array(image)
+
+        img_array = img_array / 255.0
+
+        img_array = np.expand_dims(
+
+            img_array,
+
+            axis=0
+        )
+
+        print("IMAGE READY")
+
+        # ====================================
+        # PREDICT
+        # ====================================
+
+        prediction = model.predict(
+            img_array
+        )
+
+        index = np.argmax(
+            prediction
+        )
+
+        confidence = float(
+            prediction[0][index]
+        )
+
+        label = class_names[index]
+
+        print(
+            "RESULT =",
+            label,
+            confidence
+        )
+
+        # ====================================
+        # RESPONSE
+        # ====================================
+
+        return jsonify({
+
+            "status":
+                "success",
+
+            "label":
+                label,
+
+            "confidence":
+                confidence
+        })
+
+    except Exception as e:
+
+        traceback.print_exc()
+
+        return jsonify({
+
+            "status":
+                "error",
+
+            "message":
+                str(e)
+
+        }), 500
 # =========================================================
 # HEARTBEAT STATE
 # =========================================================
