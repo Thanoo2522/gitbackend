@@ -586,11 +586,6 @@ def main_route():
             "message": str(e)
 
         }), 500
-
-# =========================================================
-# OPEN VDO AI
-# vdo imagenumber
-# =========================================================
 # =========================================================
 # OPEN VDO AI
 # vdo imagenumber
@@ -603,9 +598,9 @@ def open_vdo(event, parts):
             "replyToken"
         )
 
-        # ------------------------------------
+        # ====================================
         # VALIDATE
-        # ------------------------------------
+        # ====================================
 
         if len(parts) < 2:
 
@@ -614,46 +609,46 @@ def open_vdo(event, parts):
                 reply_token,
 
                 "รูปแบบ:\n"
-                "VDO imagenumber"
+                "vdo imagenumber"
             )
 
             return jsonify({
                 "status": "error"
             })
 
-        # ------------------------------ 
+        # ====================================
         # PROJECT
-        # ------------------------------------
+        # ====================================
 
         project_name = parts[1].lower()
 
-        # ------------------------------------
+        # ====================================
         # VDO URL
-        # ------------------------------------
+        # ====================================
 
         vdo_url = (
 
             f"{WORKER_WEBHOOK_URL}"
-            f"/vdo"
-            f"?project={project_name}"
+            f"/vdo?project={project_name}"
         )
 
-        print(
-            "VDO URL =",
-            vdo_url
-        )
+        print("VDO URL =", vdo_url)
 
-        # ------------------------------------
+        # ====================================
         # REPLY
-        # ------------------------------------
+        # ====================================
 
-        reply_message(
-
-            reply_token,
-
-            f"เปิด VDO AI\n\n"
+        msg = (
+            "เปิด VDO AI\n\n"
             f"PROJECT: {project_name}\n\n"
             f"{vdo_url}"
+        )
+
+        print(msg)
+
+        reply_message(
+            reply_token,
+            msg
         )
 
         return jsonify({
