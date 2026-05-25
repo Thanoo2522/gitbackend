@@ -1,261 +1,137 @@
 <!DOCTYPE html>
-<html lang="th">
+<html lang="en">
 <head>
 <meta charset="UTF-8">
-
-<title>LIFF AI Camera</title>
-
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>LIFF Camera Stream</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
 
 <script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
 
 <style>
-html, body {
-    margin: 0;
-    padding: 0;
-    width: 100%;
-    height: 100%;
-    background: black;
-    overflow: hidden;
-    font-family: Arial, sans-serif;
+body{
+    margin:0;
+    background:black;
+    color:white;
+    font-family:Arial;
+    text-align:center;
 }
 
-/* VIDEO FULLSCREEN */
-#video {
-    position: fixed;
-    top: 0;
-    left: 0;
-    width: 100vw;
-    height: 100vh;
-    object-fit: cover;
+header{
+    padding:10px;
+    font-size:18px;
 }
 
-/* RESULT */
-#result {
-    position: fixed;
-    top: 20px;
-    left: 20px;
-    color: white;
-    font-size: 20px;
-    text-shadow: 0 0 5px black;
-    z-index: 10;
+video{
+    width:100%;
+    height:auto;
+    background:black;
 }
 
-/* DEBUG */
-#debug {
-    position: fixed;
-    top: 80px;
-    left: 20px;
-    color: #00ffcc;
-    font-size: 14px;
-    text-shadow: 0 0 5px black;
-    z-index: 10;
+button{
+    width:90%;
+    padding:12px;
+    margin:8px;
+    font-size:16px;
+    border:none;
+    border-radius:10px;
 }
 
-/* BUTTONS */
-#ui {
-    position: fixed;
-    bottom: 30px;
-    left: 50%;
-    transform: translateX(-50%);
-    display: flex;
-    gap: 10px;
-    z-index: 20;
+#startBtn{background:#00c853;color:white;}
+#snapBtn{background:#2979ff;color:white;}
+#stopBtn{background:#ff1744;color:white;}
+
+canvas{
+    display:none;
 }
 
-button {
-    padding: 15px 25px;
-    font-size: 18px;
-    border: none;
-    border-radius: 12px;
-    background: #06c755;
-    color: white;
-    cursor: pointer;
-    font-weight: bold;
-    box-shadow: 0 4px 6px rgba(0,0,0,0.3);
-}
-
-button:active {
-    background: #05a647;
+img{
+    width:90%;
+    margin-top:10px;
+    border-radius:10px;
 }
 </style>
 </head>
 
 <body>
 
-<!-- ================= VIDEO ================= -->
-<!-- เพิ่ม attribute ให้ครบถ้วนป้องกันเบราว์เซอร์บล็อกวิดีโอ -->
-<video id="video" autoplay playsinline muted loop></video>
+<header>
+📷 LIFF Real-time Camera Stream
+</header>
 
-<!-- ================= UI ================= -->
-<div id="result">READY</div>
-<div id="debug">waiting...</div>
+<video id="video" autoplay playsinline></video>
 
-<div id="ui">
-    <button onclick="startCamera()">START</button>
-    <button onclick="capture()">CAPTURE</button>
-    <button onclick="stopCamera()">STOP</button>
-</div>
+<button id="startBtn">Start Camera</button>
+<button id="snapBtn">Capture Frame</button>
+<button id="stopBtn">Stop Camera</button>
 
-<!-- ================= CANVAS ================= -->
-<canvas id="canvas" width="224" height="224" style="display:none;"></canvas>
+<canvas id="canvas"></canvas>
+<img id="snapshot"/>
 
 <script>
 
-// ================= CONFIG =================
-const LIFF_ID = "2010144029-njNgt99E";
-const API_URL = "https://gitbackend-416424538655.asia-southeast3.run.app";
-
-// ================= ELEMENTS =================
+let stream = null;
 const video = document.getElementById("video");
 const canvas = document.getElementById("canvas");
-const ctx = canvas.getContext("2d");
+const snapshot = document.getElementById("snapshot");
 
-const result = document.getElementById("result");
-const debug = document.getElementById("debug");
+async function initLiff(){
+    try{
+        await liff.init({ liffId: "YOUR_LIFF_ID" });
 
-let stream = null;
-
-// ================= LIFF INIT =================
-async function initLiff() {
-    try {
-        await liff.init({ liffId: LIFF_ID });
-        debug.innerText = "LIFF READY";
-
-        // หากรันในแอป LINE ให้เตะออกไปเปิดที่ External Browser ทันที เพื่อป้องกันปัญหา WebView บล็อกกล้อง
-        if (liff.isInClient()) {
-            liff.openWindow({
-                url: window.location.href,
-                external: true
-            });
+        // optional: auto login
+        if(!liff.isLoggedIn()){
+            liff.login();
         }
-    } catch (e) {
-        debug.innerText = "LIFF ERROR: " + e;
+    }catch(err){
+        console.log("LIFF init error:", err);
     }
 }
 
-initLiff();
-
-// ================= CAMERA START =================
-async function startCamera() {
-    // ตรวจสอบ Secure Context ป้องกันการรันผ่านไฟล์ดิบๆ (file:///)
-    if (!window.isSecureContext) {
-        debug.innerText = "ERROR: โปรดรันผ่าน HTTPS หรือ localhost เท่านั้น";
-        alert("หน้าเว็บนี้ไม่ปลอดภัย เบราว์เซอร์ปฏิเสธการเปิดกล้อง (ต้องเปิดผ่าน HTTPS)");
-        return;
-    }
-
-    try {
-        debug.innerText = "request camera...";
-
-        // ปรับแต่ง constraints ให้มีความยืดหยุ่น รองรับทั้งมือถือและ PC
-        const constraints = {
+// เปิดกล้องสด
+async function startCamera(){
+    try{
+        stream = await navigator.mediaDevices.getUserMedia({
             video: {
-                facingMode: "environment", // พยายามเรียกกล้องหลังก่อน
-                width: { ideal: 1280 },
-                height: { ideal: 720 }
+                facingMode: "environment" // กล้องหลังมือถือ
             },
             audio: false
-        };
+        });
 
-        // เรียกขอสตรีมภาพจากกล้อง
-        stream = await navigator.mediaDevices.getUserMedia(constraints);
         video.srcObject = stream;
 
-        // แก้ไขระบบรอการตอบรับเพื่อป้องกันอาการค้างบน iOS
-        await new Promise((resolve, reject) => {
-            video.onloadedmetadata = () => {
-                video.play()
-                    .then(resolve)
-                    .catch(reject);
-            };
-            video.onerror = (err) => reject(err);
-        });
-
-        debug.innerText = `CAMERA OK (${video.videoWidth}x${video.videoHeight})`;
-
-    } catch (e) {
-        console.error(e);
-        
-        // แผนสำรอง (Fallback): หากเกิดข้อผิดพลาดจากเงื่อนไขสิ่งแวดล้อม ให้พยายามเปิดกล้องใดก็ได้ที่ใช้งานได้แทน
-        if (e.name === "OverconstrainedError" || e.name === "ConstraintNotSatisfiedError" || e.name === "NotFoundError") {
-            try {
-                debug.innerText = "Fallback to default camera...";
-                stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
-                video.srcObject = stream;
-                await video.play();
-                debug.innerText = `CAMERA OK (${video.videoWidth}x${video.videoHeight})`;
-            } catch (fallbackError) {
-                debug.innerText = "FALLBACK ERROR: " + fallbackError.message;
-            }
-        } else {
-            debug.innerText = "CAMERA ERROR: " + e.message;
-        }
+    }catch(err){
+        alert("Cannot access camera: " + err);
+        console.log(err);
     }
 }
 
-// ================= CAPTURE =================
-async function capture() {
-    if (!video.srcObject || video.readyState < 2) {
-        debug.innerText = "No camera active or video not ready";
-        return;
-    }
+// ถ่ายภาพจาก stream
+function captureFrame(){
+    const ctx = canvas.getContext("2d");
 
-    try {
-        // วาดภาพจากวิดีโอลงบน canvas ขนาด 224x224 ตามที่ AI โมเดลกำหนด
-        ctx.drawImage(video, 0, 0, 224, 224);
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
 
-        result.innerText = "Sending...";
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
-        const blob = await new Promise(res =>
-            canvas.toBlob(res, "image/jpeg", 0.85)
-        );
-
-        if (!blob) {
-            result.innerText = "Canvas Export Error";
-            return;
-        }
-
-        const form = new FormData();
-        form.append("image", blob, "frame.jpg");
-
-        // ส่งข้อมูลไปยัง API หลังบ้าน
-        const r = await fetch(API_URL + "/predict", {
-            method: "POST",
-            body: form
-        });
-
-        if (!r.ok) {
-            throw new Error(`HTTP error! status: ${r.status}`);
-        }
-
-        const data = await r.json();
-        console.log(data);
-
-        if (data.status === "success" || data.label) {
-            // ปรับเงื่อนไขรองรับรูปแบบโครงสร้าง JSON ผลลัพธ์ของข้อมูล
-            const confidence = data.confidence ? Math.round(data.confidence * 100) + "%" : "";
-            result.innerHTML = `${data.label} <br> ${confidence}`;
-        } else {
-            result.innerText = data.message || "Unknown response format";
-        }
-
-    } catch (e) {
-        console.error(e);
-        result.innerText = "SEND ERROR: " + e.message;
-    }
+    const dataURL = canvas.toDataURL("image/png");
+    snapshot.src = dataURL;
 }
 
-// ================= STOP CAMERA =================
-function stopCamera() {
-    if (stream) {
-        stream.getTracks().forEach(t => t.stop());
-        stream = null;
+// หยุดกล้อง
+function stopCamera(){
+    if(stream){
+        stream.getTracks().forEach(track => track.stop());
         video.srcObject = null;
-        result.innerText = "READY";
-        debug.innerText = "camera off";
     }
 }
+
+// Events
+document.getElementById("startBtn").onclick = startCamera;
+document.getElementById("snapBtn").onclick = captureFrame;
+document.getElementById("stopBtn").onclick = stopCamera;
+
+initLiff();
 
 </script>
 
