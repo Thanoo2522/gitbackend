@@ -422,7 +422,8 @@ def push_message(user_id, text):
 
         print("push error:", e)
 #---------------------------------------------------------
- 
+
+
 # =========================================================
 # MAIN ROUTE
 # =========================================================
@@ -506,9 +507,9 @@ def main_route():
                 # VDO
                 # VDO imagenumber
                 # ====================================
-                #elif command == "vdo":
+                elif command == "vdo":
 
-                  #   return open_vdo(  event,  parts  )                 
+                     return open_vdo(  event,  parts  )                 
                 # ====================================
                 # UNKNOWN COMMAND
                 # ====================================
@@ -548,8 +549,105 @@ def main_route():
 
         }), 500
 # =========================================================
- 
-   
+# OPEN VDO AI
+# vdo imagenumber
+# =========================================================
+def open_vdo(event, parts):
+
+    try:
+
+        reply_token = event.get(
+            "replyToken"
+        )
+
+        # ====================================
+        # VALIDATE
+        # ====================================
+
+        if len(parts) < 2:
+
+            reply_message(
+
+                reply_token,
+
+                "รูปแบบ:\n"
+                "vdo imagenumber"
+            )
+
+            return jsonify({
+                "status": "error"
+            })
+
+        # ====================================
+        # PROJECT
+        # ====================================
+
+        project_name = parts[1].lower()
+
+        # ====================================
+        # VDO URL
+        # ====================================
+
+        vdo_url = (
+
+            f"{WORKER_WEBHOOK_URL}"
+            f"/vdo?project={project_name}"
+        )
+
+        print("VDO URL =", vdo_url)
+
+        # ====================================
+        # REPLY
+        # ====================================
+
+        msg = (
+            "เปิด VDO AI\n\n"
+            f"PROJECT: {project_name}\n\n"
+            f"{vdo_url}"
+        )
+
+        print(msg)
+
+        reply_message(
+            reply_token,
+            msg
+        )
+
+        return jsonify({
+            "status": "success"
+        })
+
+    except Exception as e:
+
+        traceback.print_exc()
+
+        return jsonify({
+
+            "status": "error",
+
+            "message": str(e)
+
+        }), 500
+#---------------------------------------
+# =========================================================
+# VDO PAGE
+# =========================================================
+@app.route("/vdo")
+def vdo_page():
+
+    project = request.args.get(
+        "project",
+        "imagenumber"
+    )
+
+    return render_template(
+
+        "vdo.html",
+
+        project=project
+    )
+        #===========================================
+    
 # =========================================================
 # IMAGE COLOR
 # imagecolor red
