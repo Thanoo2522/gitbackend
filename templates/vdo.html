@@ -2,10 +2,18 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>LIFF Camera Stream</title>
-<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>LIFF + Teachable Machine Realtime</title>
 
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+<!-- LIFF -->
 <script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
+
+<!-- TensorFlow.js -->
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@latest"></script>
+
+<!-- Teachable Machine Image -->
+<script src="https://cdn.jsdelivr.net/npm/@teachablemachine/image@latest"></script>
 
 <style>
 body{
@@ -23,113 +31,150 @@ header{
 
 video{
     width:100%;
-    height:auto;
-    background:black;
+    border-radius:10px;
 }
 
 button{
     width:90%;
     padding:12px;
-    margin:8px;
+    margin:6px;
     font-size:16px;
     border:none;
     border-radius:10px;
 }
 
 #startBtn{background:#00c853;color:white;}
-#snapBtn{background:#2979ff;color:white;}
 #stopBtn{background:#ff1744;color:white;}
 
-canvas{
-    display:none;
+#label-container{
+    margin-top:10px;
+    font-size:18px;
+    font-weight:bold;
 }
 
-img{
-    width:90%;
-    margin-top:10px;
-    border-radius:10px;
-}
+canvas{display:none;}
 </style>
 </head>
 
 <body>
 
-<header>
-📷 LIFF Real-time Camera Stream
-</header>
+<header>📷 Real-time AI Camera (Teachable Machine)</header>
 
 <video id="video" autoplay playsinline></video>
 
-<button id="startBtn">Start Camera</button>
-<button id="snapBtn">Capture Frame</button>
-<button id="stopBtn">Stop Camera</button>
+<button id="startBtn">Start Camera + AI</button>
+<button id="stopBtn">Stop</button>
 
-<canvas id="canvas"></canvas>
-<img id="snapshot"/>
+<div id="label-container">Loading model...</div>
 
 <script>
 
 let stream = null;
-const video = document.getElementById("video");
-const canvas = document.getElementById("canvas");
-const snapshot = document.getElementById("snapshot");
+let video = document.getElementById("video");
+let model, maxPredictions;
+let running = false;
+let intervalId;
 
+// 👉 path โมเดลใน VSCode
+const modelURL = "models_v1/model.json";
+const metadataURL = "models_v1/metadata.json";
+
+// ===============================
+// LOAD MODEL
+// ===============================
+async function loadModel(){
+    model = await tmImage.load(modelURL, metadataURL);
+    maxPredictions = model.getTotalClasses();
+
+    document.getElementById("label-container").innerHTML = "Model Loaded ✅";
+}
+
+// ===============================
+// START CAMERA
+// ===============================
+async function startCamera(){
+    stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: "environment" },
+        audio: false
+    });
+
+    video.srcObject = stream;
+}
+
+// ===============================
+// PREDICT FRAME
+// ===============================
+async function predict(){
+    if(!model) return;
+
+    const prediction = await model.predict(video);
+
+    prediction.sort((a,b)=> b.probability - a.probability);
+
+    let resultText = "";
+
+    prediction.forEach(p => {
+        resultText += `${p.className}: ${(p.probability*100).toFixed(1)}%<br>`;
+    });
+
+    document.getElementById("label-container").innerHTML = resultText;
+}
+
+// ===============================
+// START LOOP (2 FPS)
+// ===============================
+function startAI(){
+    if(running) return;
+    running = true;
+
+    intervalId = setInterval(() => {
+        predict();
+    }, 500); // 500ms = 2 frames/sec
+}
+
+// ===============================
+// STOP
+// ===============================
+function stopAll(){
+    running = false;
+
+    if(intervalId){
+        clearInterval(intervalId);
+    }
+
+    if(stream){
+        stream.getTracks().forEach(t => t.stop());
+    }
+
+    video.srcObject = null;
+}
+
+// ===============================
+// BUTTON EVENTS
+// ===============================
+document.getElementById("startBtn").onclick = async () => {
+    await loadModel();
+    await startCamera();
+    startAI();
+};
+
+document.getElementById("stopBtn").onclick = stopAll;
+
+// ===============================
+// LIFF INIT (optional)
+// ===============================
 async function initLiff(){
     try{
-        await liff.init({ liffId: "YOUR_LIFF_ID" });
+        await liff.init({ liffId: "2010144029-njNgt99E" });
 
-        // optional: auto login
         if(!liff.isLoggedIn()){
             liff.login();
         }
-    }catch(err){
-        console.log("LIFF init error:", err);
-    }
-}
-
-// เปิดกล้องสด--
-async function startCamera(){
-    try{
-        stream = await navigator.mediaDevices.getUserMedia({
-            video: {
-                facingMode: "environment" // กล้องหลังมือถือ
-            },
-            audio: false
-        });
-
-        video.srcObject = stream;
 
     }catch(err){
-        alert("Cannot access camera: " + err);
-        console.log(err);
+        console.log("LIFF error:", err);
     }
 }
-
-// ถ่ายภาพจาก stream
-function captureFrame(){
-    const ctx = canvas.getContext("2d");
-
-    canvas.width = video.videoWidth;
-    canvas.height = video.videoHeight;
-
-    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-
-    const dataURL = canvas.toDataURL("image/png");
-    snapshot.src = dataURL;
-}
-
-// หยุดกล้อง
-function stopCamera(){
-    if(stream){
-        stream.getTracks().forEach(track => track.stop());
-        video.srcObject = null;
-    }
-}
-
-// Events
-document.getElementById("startBtn").onclick = startCamera;
-document.getElementById("snapBtn").onclick = captureFrame;
-document.getElementById("stopBtn").onclick = stopCamera;
 
 initLiff();
 
