@@ -12,23 +12,69 @@
 <style>
 
 body{
-    font-family: Arial;
+
+    margin:0;
+    padding:20px;
+
+    font-family:Arial;
+
     text-align:center;
-    background:#111;
-    color:white;
+
+    background:white;
+
+    color:black;
+}
+
+h2{
+
+    margin-bottom:20px;
 }
 
 video{
+
     width:95%;
     max-width:500px;
-    border-radius:20px;
+
     background:black;
+
+    border-radius:20px;
 }
 
 #result{
+
     margin-top:20px;
+
     font-size:40px;
+
     font-weight:bold;
+}
+
+#debug{
+
+    margin-top:20px;
+
+    font-size:16px;
+
+    color:gray;
+
+    word-break:break-all;
+}
+
+button{
+
+    margin-top:20px;
+
+    padding:15px 30px;
+
+    font-size:20px;
+
+    border:none;
+
+    border-radius:15px;
+
+    background:#06c755;
+
+    color:white;
 }
 
 </style>
@@ -39,23 +85,69 @@ video{
 
 <h2>Realtime AI</h2>
 
+<!-- ================================================= -->
+<!-- VIDEO -->
+<!-- ================================================= -->
+
 <video
+
     id="video"
+
     autoplay
+
     playsinline
+
+    webkit-playsinline
+
     muted>
+
 </video>
 
+<!-- ================================================= -->
+<!-- CANVAS -->
+<!-- ================================================= -->
+
 <canvas
+
     id="canvas"
+
     width="224"
+
     height="224"
+
     style="display:none;">
+
 </canvas>
 
+<!-- ================================================= -->
+<!-- RESULT -->
+<!-- ================================================= -->
+
 <div id="result">
-    loading...
+
+    waiting...
+
 </div>
+
+<!-- ================================================= -->
+<!-- DEBUG -->
+<!-- ================================================= -->
+
+<div id="debug">
+
+    debug...
+
+</div>
+
+<!-- ================================================= -->
+<!-- START BUTTON -->
+<!-- ================================================= -->
+
+<button onclick="init()">
+
+    START CAMERA
+
+</button>
 
 <script>
 
@@ -64,6 +156,7 @@ video{
 // =====================================================
 
 const API_URL =
+
 "https://gitbackend-416424538655.asia-southeast3.run.app"
 
 // =====================================================
@@ -77,6 +170,7 @@ const params =
     )
 
 const project =
+
     params.get("project")
 
 console.log(
@@ -89,16 +183,24 @@ console.log(
 // =====================================================
 
 const video =
+
     document.getElementById("video")
 
 const canvas =
+
     document.getElementById("canvas")
 
 const ctx =
+
     canvas.getContext("2d")
 
 const resultDiv =
+
     document.getElementById("result")
+
+const debugDiv =
+
+    document.getElementById("debug")
 
 // =====================================================
 // CAMERA
@@ -108,6 +210,9 @@ async function startCamera(){
 
     try{
 
+        debugDiv.innerHTML =
+            "requesting camera..."
+
         const stream =
 
             await navigator
@@ -115,19 +220,32 @@ async function startCamera(){
             .getUserMedia({
 
                 video:{
+
                     facingMode:"environment"
                 },
 
                 audio:false
             })
 
+        console.log(
+            "STREAM =",
+            stream
+        )
+
+        debugDiv.innerHTML =
+            "camera granted"
+
+        // =========================================
+        // VIDEO
+        // =========================================
+
         video.srcObject = stream
 
-        // wait video ready
+        // IMPORTANT
 
         await new Promise(
 
-            (resolve)=>{
+            resolve=>{
 
                 video.onloadedmetadata =
                     ()=>{
@@ -137,9 +255,30 @@ async function startCamera(){
             }
         )
 
+        debugDiv.innerHTML =
+            "metadata loaded"
+
+        // IMPORTANT
+
         await video.play()
 
-        console.log("CAMERA READY")
+        debugDiv.innerHTML =
+
+            "video playing"
+            +
+            "<br>"
+            +
+            "SIZE = "
+            +
+            video.videoWidth
+            +
+            " x "
+            +
+            video.videoHeight
+
+        console.log(
+            "VIDEO PLAY SUCCESS"
+        )
 
     }catch(e){
 
@@ -147,6 +286,14 @@ async function startCamera(){
             "CAMERA ERROR",
             e
         )
+
+        debugDiv.innerHTML =
+
+            "CAMERA ERROR"
+            +
+            "<br>"
+            +
+            e
 
         resultDiv.innerHTML =
             "camera error"
@@ -161,15 +308,24 @@ let sending = false
 
 async function sendFrame(){
 
-    // prevent spam
+    // =========================================
+    // PREVENT SPAM
+    // =========================================
 
     if(sending){
         return
     }
 
-    // wait video ready
+    // =========================================
+    // VIDEO READY
+    // =========================================
 
     if(video.readyState < 2){
+
+        console.log(
+            "VIDEO NOT READY"
+        )
+
         return
     }
 
@@ -177,57 +333,92 @@ async function sendFrame(){
 
     try{
 
+        // =====================================
+        // DRAW IMAGE
+        // =====================================
+
         ctx.drawImage(
 
             video,
+
             0,
+
             0,
+
             224,
+
             224
         )
 
-        const blob = await new Promise(
+        // =====================================
+        // TO BLOB
+        // =====================================
 
-            resolve =>
+        const blob =
 
-                canvas.toBlob(
+            await new Promise(
 
-                    resolve,
+                resolve =>
 
-                    "image/jpeg",
+                    canvas.toBlob(
 
-                    0.7
-                )
-        )
+                        resolve,
+
+                        "image/jpeg",
+
+                        0.7
+                    )
+            )
+
+        // =====================================
+        // FORM DATA
+        // =====================================
 
         const formData =
+
             new FormData()
 
         formData.append(
+
             "image",
+
             blob,
+
             "frame.jpg"
         )
 
         formData.append(
+
             "project",
+
             project
         )
+
+        // =====================================
+        // FETCH
+        // =====================================
 
         const r = await fetch(
 
             API_URL + "/predict",
 
             {
+
                 method:"POST",
+
                 body:formData
             }
         )
 
         const data =
+
             await r.json()
 
         console.log(data)
+
+        // =====================================
+        // RESULT
+        // =====================================
 
         if(data.status === "success"){
 
@@ -246,6 +437,7 @@ async function sendFrame(){
         }else{
 
             resultDiv.innerHTML =
+
                 data.message
         }
 
@@ -256,6 +448,14 @@ async function sendFrame(){
             e
         )
 
+        debugDiv.innerHTML =
+
+            "SEND ERROR"
+            +
+            "<br>"
+            +
+            e
+
     }finally{
 
         sending = false
@@ -263,27 +463,40 @@ async function sendFrame(){
 }
 
 // =====================================================
-// START
+// INIT
 // =====================================================
 
 async function init(){
 
     try{
 
+        debugDiv.innerHTML =
+            "LIFF INIT..."
+
+        // =====================================
+        // LIFF
+        // =====================================
+
         await liff.init({
 
             liffId:"2010144029-njNgt99E"
         })
 
-        console.log("LIFF READY")
+        debugDiv.innerHTML =
+            "LIFF READY"
+
+        // =====================================
+        // CAMERA
+        // =====================================
 
         await startCamera()
 
         resultDiv.innerHTML =
             "AI READY"
 
-        // 1 FPS ก่อน
-        // ลดโหลด Cloud Run
+        // =====================================
+        // LOOP
+        // =====================================
 
         setInterval(
 
@@ -299,12 +512,18 @@ async function init(){
             e
         )
 
+        debugDiv.innerHTML =
+
+            "INIT ERROR"
+            +
+            "<br>"
+            +
+            e
+
         resultDiv.innerHTML =
             "init error"
     }
 }
-
-init()
 
 </script>
 
