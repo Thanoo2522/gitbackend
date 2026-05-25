@@ -98,9 +98,21 @@ button{
     autoplay
     muted
     playsinline
-    webkit-playsinline>
-</video>
+    webkit-playsinline
+    style="display:none;">
+</video>>
 
+<canvas
+    id="preview"
+    width="640"
+    height="480"
+    style="
+        width:95%;
+        max-width:500px;
+        border-radius:20px;
+        background:black;
+    ">
+</canvas>
 <!-- ========================================= -->
 <!-- PLAY BUTTON -->
 <!-- ========================================= -->
@@ -201,6 +213,16 @@ const video =
 const canvas =
 
     document.getElementById("canvas")
+
+const preview =
+
+    document.getElementById("preview")
+
+const previewCtx =
+
+    preview.getContext("2d")
+
+
 
 const ctx =
 
@@ -553,6 +575,31 @@ async function init(){
         // =====================================
 
         await startCamera()
+        
+        setInterval(
+
+    ()=>{
+
+        if(video.readyState >= 2){
+
+            previewCtx.drawImage(
+
+                video,
+
+                0,
+
+                0,
+
+                640,
+
+                480
+            )
+        }
+
+    },
+
+    30
+)
 
         resultDiv.innerHTML =
             "AI READY"
