@@ -60,23 +60,6 @@ video{
     word-break:break-all;
 }
 
-button{
-
-    margin-top:20px;
-
-    padding:15px 30px;
-
-    font-size:20px;
-
-    border:none;
-
-    border-radius:15px;
-
-    background:#06c755;
-
-    color:white;
-}
-
 </style>
 
 </head>
@@ -85,9 +68,9 @@ button{
 
 <h2>Realtime AI</h2>
 
-<!-- ================================================= -->
+<!-- ========================================= -->
 <!-- VIDEO -->
-<!-- ================================================= -->
+<!-- ========================================= -->
 
 <video
 
@@ -103,9 +86,9 @@ button{
 
 </video>
 
-<!-- ================================================= -->
+<!-- ========================================= -->
 <!-- CANVAS -->
-<!-- ================================================= -->
+<!-- ========================================= -->
 
 <canvas
 
@@ -119,19 +102,19 @@ button{
 
 </canvas>
 
-<!-- ================================================= -->
+<!-- ========================================= -->
 <!-- RESULT -->
-<!-- ================================================= -->
+<!-- ========================================= -->
 
 <div id="result">
 
-    waiting...
+    loading...
 
 </div>
 
-<!-- ================================================= -->
+<!-- ========================================= -->
 <!-- DEBUG -->
-<!-- ================================================= -->
+<!-- ========================================= -->
 
 <div id="debug">
 
@@ -139,25 +122,19 @@ button{
 
 </div>
 
-<!-- ================================================= -->
-<!-- START BUTTON -->
-<!-- ================================================= -->
-
-<button onclick="init()">
-
-    START CAMERA
-
-</button>
-
 <script>
 
 // =====================================================
 // CONFIG
 // =====================================================
 
+const LIFF_ID =
+
+    "2010144029-njNgt99E"
+
 const API_URL =
 
-"https://gitbackend-416424538655.asia-southeast3.run.app"
+    "https://gitbackend-416424538655.asia-southeast3.run.app"
 
 // =====================================================
 // PARAMS
@@ -202,6 +179,8 @@ const debugDiv =
 
     document.getElementById("debug")
 
+let sending = false
+
 // =====================================================
 // CAMERA
 // =====================================================
@@ -219,10 +198,7 @@ async function startCamera(){
             .mediaDevices
             .getUserMedia({
 
-                video:{
-
-                    facingMode:"environment"
-                },
+                video:true,
 
                 audio:false
             })
@@ -232,43 +208,17 @@ async function startCamera(){
             stream
         )
 
-        debugDiv.innerHTML =
-            "camera granted"
-
-        // =========================================
-        // VIDEO
-        // =========================================
-
         video.srcObject = stream
-
-        // IMPORTANT
-
-        await new Promise(
-
-            resolve=>{
-
-                video.onloadedmetadata =
-                    ()=>{
-
-                        resolve()
-                    }
-            }
-        )
-
-        debugDiv.innerHTML =
-            "metadata loaded"
-
-        // IMPORTANT
 
         await video.play()
 
         debugDiv.innerHTML =
 
-            "video playing"
+            "camera success"
             +
             "<br>"
             +
-            "SIZE = "
+            "VIDEO SIZE = "
             +
             video.videoWidth
             +
@@ -276,35 +226,26 @@ async function startCamera(){
             +
             video.videoHeight
 
-        console.log(
-            "VIDEO PLAY SUCCESS"
-        )
-
     }catch(e){
 
-        console.log(
-            "CAMERA ERROR",
-            e
-        )
+        console.log(e)
 
         debugDiv.innerHTML =
 
             "CAMERA ERROR"
             +
-            "<br>"
+            "<br><br>"
             +
             e
 
         resultDiv.innerHTML =
-            "camera error"
+            "camera denied"
     }
 }
 
 // =====================================================
 // SEND FRAME
 // =====================================================
-
-let sending = false
 
 async function sendFrame(){
 
@@ -321,11 +262,6 @@ async function sendFrame(){
     // =========================================
 
     if(video.readyState < 2){
-
-        console.log(
-            "VIDEO NOT READY"
-        )
-
         return
     }
 
@@ -443,16 +379,13 @@ async function sendFrame(){
 
     }catch(e){
 
-        console.log(
-            "SEND ERROR",
-            e
-        )
+        console.log(e)
 
         debugDiv.innerHTML =
 
             "SEND ERROR"
             +
-            "<br>"
+            "<br><br>"
             +
             e
 
@@ -479,11 +412,31 @@ async function init(){
 
         await liff.init({
 
-            liffId:"2010144029-njNgt99E"
+            liffId:LIFF_ID
         })
 
+        // =====================================
+        // OPEN EXTERNAL BROWSER
+        // IMPORTANT
+        // =====================================
+
+        if(liff.isInClient()){
+
+            debugDiv.innerHTML =
+                "opening external browser..."
+
+            liff.openWindow({
+
+                url:window.location.href,
+
+                external:true
+            })
+
+            return
+        }
+
         debugDiv.innerHTML =
-            "LIFF READY"
+            "external browser ready"
 
         // =====================================
         // CAMERA
@@ -507,16 +460,13 @@ async function init(){
 
     }catch(e){
 
-        console.log(
-            "INIT ERROR",
-            e
-        )
+        console.log(e)
 
         debugDiv.innerHTML =
 
             "INIT ERROR"
             +
-            "<br>"
+            "<br><br>"
             +
             e
 
@@ -524,6 +474,12 @@ async function init(){
             "init error"
     }
 }
+
+// =====================================================
+// START
+// =====================================================
+
+init()
 
 </script>
 
