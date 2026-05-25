@@ -1,4 +1,4 @@
-from click import command
+#from click import command
 from flask import Flask, request, jsonify
 from flask import render_template
 
@@ -425,30 +425,36 @@ def push_message(user_id, text):
 # =========================================================
 # LOAD AI MODEL
 # =========================================================
+# =========================================================
+# LOAD AI MODELS
+# =========================================================
 
 print("=" * 50)
 print("LOAD AI MODELS")
 print("=" * 50)
 
-models = {
+models = {}
 
-    "imagenumber":
+models["imagenumber"] = tf.keras.models.load_model(
+    "models/imagenumber.h5"
+)
 
-        tf.keras.models.load_model(
-            "models/imagenumber.h5"
-        )
-}
+print("imagenumber model loaded")
+
+# =========================================================
+# LABELS
+# =========================================================
 
 labels = {
 
-    "imagenumber":[
+    "imagenumber": [
 
         "1",
         "2"
     ]
 }
 
-print("MODEL LOADED")
+print("LABELS LOADED")
 
 # =========================================================
 # MAIN ROUTE

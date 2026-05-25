@@ -4,7 +4,7 @@ requests
 Pillow
 firebase-admin
 werkzeug
-tensorflow
+tensorflow==2.12.0
 numpy
  
  
