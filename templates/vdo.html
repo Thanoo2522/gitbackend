@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+
+<meta charset="UTF-8">
+
+<title>Realtime AI</title>
+
+<script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
+
+<style>
+
+body{
+    font-family: Arial;
+    text-align:center;
+    background:#111;
+    color:white;
+}
+
+video{
+    width:95%;
+    max-width:500px;
+    border-radius:20px;
+}
+
+#result{
+    margin-top:20px;
+    font-size:40px;
+    font-weight:bold;
+}
+
+</style>
+
+</head>
+
+<body>
+
+<h2>Realtime AI</h2>
+
+<video
+    id="video"
+    autoplay
+    playsinline>
+</video>
+
+<canvas
+    id="canvas"
+    width="224"
+    height="224"
+    style="display:none;">
+</canvas>
+
+<div id="result">
+    loading...
+</div>
+
+<script>
+
+const params =
+    new URLSearchParams(
+        window.location.search
+    )
+
+const project =
+    params.get("project")
+
+console.log(project)
+
+const video =
+    document.getElementById("video")
+
+const canvas =
+    document.getElementById("canvas")
+
+const ctx =
+    canvas.getContext("2d")
+
+// =====================================================
+// CAMERA
+// =====================================================
+
+async function startCamera(){
+
+    const stream =
+
+        await navigator
+        .mediaDevices
+        .getUserMedia({
+
+            video:{
+                facingMode:"environment"
+            },
+
+            audio:false
+        })
+
+    video.srcObject = stream
+}
+
+// =====================================================
+// SEND FRAME
+// =====================================================
+
+async function sendFrame(){
+
+    try{
+
+        ctx.drawImage(
+
+            video,
+            0,
+            0,
+            224,
+            224
+        )
+
+        canvas.toBlob(
+
+            async(blob)=>{
+
+                const formData =
+                    new FormData()
+
+                formData.append(
+                    "image",
+                    blob,
+                    "frame.jpg"
+                )
+
+                formData.append(
+                    "project",
+                    project
+                )
+
+                const r = await fetch(
+
+                    "/predict",
+
+                    {
+                        method:"POST",
+                        body:formData
+                    }
+                )
+
+                const data =
+                    await r.json()
+
+                console.log(data)
+
+                document.getElementById(
+                    "result"
+                ).innerHTML =
+
+                    data.label
+                    +
+                    "<br>"
+                    +
+                    Math.round(
+                        data.confidence * 100
+                    )
+                    +
+                    "%"
+
+            },
+
+            "image/jpeg",
+            0.7
+        )
+
+    }catch(e){
+
+        console.log(e)
+    }
+}
+
+// =====================================================
+// START
+// =====================================================
+
+async function init(){
+
+    await liff.init({
+
+        liffId:"YOUR_LIFF_ID"
+    })
+
+    await startCamera()
+
+    // 2 FPS
+    setInterval(
+
+        sendFrame,
+
+        500
+    )
+}
+
+init()
+
+</script>
+
+</body>
+</html>

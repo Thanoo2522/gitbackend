@@ -17,6 +17,9 @@ from io import BytesIO
 import uuid
 import base64
 import zipfile
+#------------- เกี่ยวกับ AI Model
+import numpy as np
+import tensorflow as tf
 # =========================================================
 # FLASK
 # =========================================================
@@ -50,6 +53,8 @@ WORKER_WEBHOOK_URL = os.environ.get(
     "WORKER_WEBHOOK_URL"
 )
 
+LIFF_ID = os.environ.get("LIFF_ID")
+
 # =========================================================
 # VALIDATION
 # =========================================================
@@ -68,7 +73,8 @@ required_env = {
         SERVER_ID,
 
     "WORKER_WEBHOOK_URL":
-        WORKER_WEBHOOK_URL
+        WORKER_WEBHOOK_URL,
+    "LIFF_ID": LIFF_ID   
 }
 
 for k, v in required_env.items():
@@ -416,9 +422,44 @@ def push_message(user_id, text):
         print("push error:", e)
 #---------------------------------------------------------
 # =========================================================
-# MAIN ROUTE
+# LOAD AI MODEL
 # =========================================================
 
+print("=" * 50)
+print("LOAD AI MODELS")
+print("=" * 50)
+
+models = {
+
+    "imagenumber":
+
+        tf.keras.models.load_model(
+            "models/imagenumber.h5"
+        ),
+
+    "imagecolor":
+
+        tf.keras.models.load_model(
+            "models/imagecolor.h5"
+        )
+}
+
+labels = {
+
+    "imagenumber":[
+
+        "1",
+        "2"
+    ],
+
+    "imagecolor":[
+
+        "red",
+        "blue"
+    ]
+}
+
+print("MODEL LOADED")
 
 # =========================================================
 # MAIN ROUTE
@@ -497,7 +538,15 @@ def main_route():
                     )
                 elif command == "download":
 
-                     return download_dataset( event, parts )                   
+                     return download_dataset( event, parts )  
+
+                # ====================================
+                # VDO
+                # VDO imagenumber
+                # ====================================
+                elif command == "vdo":
+
+                     return open_vdo(  event,  parts  )                 
                 # ====================================
                 # UNKNOWN COMMAND
                 # ====================================
@@ -537,6 +586,176 @@ def main_route():
 
         }), 500
 
+# =========================================================
+# OPEN VDO AI
+# vdo imagenumber
+# =========================================================
+def open_vdo(event, parts):
+
+    try:
+
+        reply_token = event.get(
+            "replyToken"
+        )
+
+        # ------------------------------------
+        # VALIDATE
+        # ------------------------------------
+
+        if len(parts) < 2:
+
+            reply_message(
+
+                reply_token,
+
+                "รูปแบบ:\n"
+                "VDO imagenumber"
+            )
+
+            return jsonify({
+                "status": "error"
+            })
+
+        # ------------------------------------
+        # PROJECT
+        # ------------------------------------
+
+        project_name = parts[1].lower()
+
+        # ------------------------------------
+        # LIFF URL
+        # ------------------------------------
+
+        liff_url = (
+
+            f"https://liff.line.me/{LIFF_ID}"
+            f"?mode=vdo"
+            f"&project={project_name}"
+        )
+
+        print(
+            "LIFF URL =",
+            liff_url
+        )
+
+        # ------------------------------------
+        # REPLY
+        # ------------------------------------
+
+        reply_message(
+
+            reply_token,
+
+            f"เปิด VDO AI\n\n"
+            f"PROJECT: {project_name}\n\n"
+            f"{liff_url}"
+        )
+
+        return jsonify({
+            "status": "success"
+        })
+
+    except Exception as e:
+
+        traceback.print_exc()
+
+        return jsonify({
+
+            "status": "error",
+
+            "message": str(e)
+
+        }), 500
+        #===========================================
+@app.route("/predict", methods=["POST"])
+def predict():
+
+    try:
+
+        file = request.files["image"]
+
+        project = request.form.get(
+            "project"
+        )
+
+        print(
+            "PROJECT =",
+            project
+        )
+
+        # ====================================
+        # LOAD MODEL
+        # ====================================
+
+        model = models[project]
+
+        class_names = labels[project]
+
+        # ====================================
+        # IMAGE
+        # ====================================
+
+        image = Image.open(
+            file.stream
+        )
+
+        image = image.convert("RGB")
+
+        image = image.resize(
+            (224, 224)
+        )
+
+        img_array = np.array(image)
+
+        img_array = img_array / 255.0
+
+        img_array = np.expand_dims(
+
+            img_array,
+
+            axis=0
+        )
+
+        # ====================================
+        # PREDICT
+        # ====================================
+
+        prediction = model.predict(
+            img_array
+        )
+
+        index = np.argmax(
+            prediction
+        )
+
+        confidence = float(
+            prediction[0][index]
+        )
+
+        label = class_names[index]
+
+        return jsonify({
+
+            "label":
+                label,
+
+            "confidence":
+                confidence
+        })
+
+    except Exception as e:
+
+        traceback.print_exc()
+
+        return jsonify({
+
+            "status":
+                "error",
+
+            "message":
+                str(e)
+
+        }), 500    
 # =========================================================
 # IMAGE COLOR
 # imagecolor red
