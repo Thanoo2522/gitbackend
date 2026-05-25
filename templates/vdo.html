@@ -38,6 +38,27 @@ video{
     background:black;
 
     border-radius:20px;
+
+    object-fit:cover;
+}
+
+button{
+
+    margin-top:20px;
+
+    padding:15px 30px;
+
+    font-size:20px;
+
+    border:none;
+
+    border-radius:15px;
+
+    background:#06c755;
+
+    color:white;
+
+    cursor:pointer;
 }
 
 #result{
@@ -78,13 +99,35 @@ video{
 
     autoplay
 
+    muted
+
     playsinline
 
     webkit-playsinline
 
-    muted>
+    controls>
 
 </video>
+
+<!-- ========================================= -->
+<!-- PLAY BUTTON -->
+<!-- ========================================= -->
+
+<button onclick="video.play()">
+
+    PLAY VIDEO
+
+</button>
+
+<!-- ========================================= -->
+<!-- START BUTTON -->
+<!-- ========================================= -->
+
+<button onclick="init()">
+
+    START AI
+
+</button>
 
 <!-- ========================================= -->
 <!-- CANVAS -->
@@ -192,13 +235,19 @@ async function startCamera(){
         debugDiv.innerHTML =
             "requesting camera..."
 
+        // =====================================
+        // GET CAMERA
+        // =====================================
+
         const stream =
 
             await navigator
             .mediaDevices
             .getUserMedia({
 
-                video:true,
+                video:{
+                    facingMode:"user"
+                },
 
                 audio:false
             })
@@ -208,27 +257,106 @@ async function startCamera(){
             stream
         )
 
+        debugDiv.innerHTML =
+            "camera granted"
+
+        // =====================================
+        // VIDEO SETTINGS
+        // =====================================
+
         video.srcObject = stream
 
-        await video.play()
+        video.muted = true
+
+        video.autoplay = true
+
+        video.playsInline = true
+
+        video.setAttribute(
+            "playsinline",
+            true
+        )
+
+        video.setAttribute(
+            "webkit-playsinline",
+            true
+        )
+
+        // =====================================
+        // WAIT METADATA
+        // =====================================
+
+        await new Promise(
+
+            resolve=>{
+
+                video.onloadedmetadata =
+                    ()=>{
+
+                        resolve()
+                    }
+            }
+        )
 
         debugDiv.innerHTML =
+            "metadata loaded"
 
-            "camera success"
-            +
-            "<br>"
-            +
-            "VIDEO SIZE = "
-            +
-            video.videoWidth
-            +
-            " x "
-            +
-            video.videoHeight
+        // =====================================
+        // FORCE PLAY
+        // =====================================
+
+        const playPromise =
+            video.play()
+
+        if(playPromise !== undefined){
+
+            playPromise
+
+            .then(()=>{
+
+                console.log(
+                    "VIDEO PLAYING"
+                )
+
+                debugDiv.innerHTML =
+
+                    "camera success"
+                    +
+                    "<br><br>"
+                    +
+                    "VIDEO SIZE = "
+                    +
+                    video.videoWidth
+                    +
+                    " x "
+                    +
+                    video.videoHeight
+
+            })
+
+            .catch(err=>{
+
+                console.log(
+                    "PLAY ERROR",
+                    err
+                )
+
+                debugDiv.innerHTML =
+
+                    "PLAY ERROR"
+                    +
+                    "<br><br>"
+                    +
+                    err
+            })
+        }
 
     }catch(e){
 
-        console.log(e)
+        console.log(
+            "CAMERA ERROR",
+            e
+        )
 
         debugDiv.innerHTML =
 
@@ -417,7 +545,6 @@ async function init(){
 
         // =====================================
         // OPEN EXTERNAL BROWSER
-        // IMPORTANT
         // =====================================
 
         if(liff.isInClient()){
@@ -474,12 +601,6 @@ async function init(){
             "init error"
     }
 }
-
-// =====================================================
-// START
-// =====================================================
-
-init()
 
 </script>
 
