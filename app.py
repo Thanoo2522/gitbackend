@@ -33,32 +33,7 @@ app = Flask(__name__)
 # LOAD AI MODELS
 # =========================================================
 
-print("=" * 50)
-print("LOAD AI MODELS")
-print("=" * 50)
 
-models = {}
-
-models["imagenumber"] = tf.keras.models.load_model(
-    "models/imagenumber.h5"
-)
-
-print("imagenumber model loaded")
-
-# =========================================================
-# LABELS
-# =========================================================
-
-labels = {
-
-    "imagenumber": [
-
-        "1",
-        "2"
-    ]
-}
-
-print("LABELS LOADED")
 
 # =========================================================
 # HEARTBEAT STATE
@@ -681,95 +656,7 @@ def vdo_page():
         project=project
     )
         #===========================================
-@app.route("/predict", methods=["POST"])
-def predict():
-
-    try:
-
-        file = request.files["image"]
-
-        project = request.form.get(
-            "project"
-        )
-
-        print(
-            "PROJECT =",
-            project
-        )
-
-        # ====================================
-        # LOAD MODEL
-        # ====================================
-
-        model = models[project]
-
-        class_names = labels[project]
-
-        # ====================================
-        # IMAGE
-        # ====================================
-
-        image = Image.open(
-            file.stream
-        )
-
-        image = image.convert("RGB")
-
-        image = image.resize(
-            (224, 224)
-        )
-
-        img_array = np.array(image)
-
-        img_array = img_array / 255.0
-
-        img_array = np.expand_dims(
-
-            img_array,
-
-            axis=0
-        )
-
-        # ====================================
-        # PREDICT
-        # ====================================
-
-        prediction = model.predict(
-            img_array
-        )
-
-        index = np.argmax(
-            prediction
-        )
-
-        confidence = float(
-            prediction[0][index]
-        )
-
-        label = class_names[index]
-
-        return jsonify({
-
-            "label":
-                label,
-
-            "confidence":
-                confidence
-        })
-
-    except Exception as e:
-
-        traceback.print_exc()
-
-        return jsonify({
-
-            "status":
-                "error",
-
-            "message":
-                str(e)
-
-        }), 500    
+  
 # =========================================================
 # IMAGE COLOR
 # imagecolor red
