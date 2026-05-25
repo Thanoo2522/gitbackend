@@ -30,16 +30,14 @@ h2{
     margin-bottom:20px;
 }
 
-video{
+#preview{
 
     width:95%;
     max-width:500px;
 
-    background:black;
-
     border-radius:20px;
 
-    object-fit:cover;
+    background:black;
 }
 
 button{
@@ -90,42 +88,44 @@ button{
 <h2>Realtime AI</h2>
 
 <!-- ========================================= -->
-<!-- VIDEO -->
+<!-- HIDDEN VIDEO -->
 <!-- ========================================= -->
 
 <video
+
     id="video"
+
     autoplay
+
     muted
+
     playsinline
+
     webkit-playsinline
+
     style="display:none;">
-</video>>
+
+</video>
+
+<!-- ========================================= -->
+<!-- PREVIEW -->
+<!-- ========================================= -->
 
 <canvas
+
     id="preview"
+
     width="640"
-    height="480"
-    style="
-        width:95%;
-        max-width:500px;
-        border-radius:20px;
-        background:black;
-    ">
+
+    height="480">
+
 </canvas>
-<!-- ========================================= -->
-<!-- PLAY BUTTON -->
-<!-- ========================================= -->
-
-<button onclick="video.play()">
-
-    PLAY VIDEO
-
-</button>
 
 <!-- ========================================= -->
 <!-- START BUTTON -->
 <!-- ========================================= -->
+
+<br>
 
 <button onclick="init()">
 
@@ -134,7 +134,7 @@ button{
 </button>
 
 <!-- ========================================= -->
-<!-- CANVAS -->
+<!-- AI CANVAS -->
 <!-- ========================================= -->
 
 <canvas
@@ -210,10 +210,6 @@ const video =
 
     document.getElementById("video")
 
-const canvas =
-
-    document.getElementById("canvas")
-
 const preview =
 
     document.getElementById("preview")
@@ -222,7 +218,9 @@ const previewCtx =
 
     preview.getContext("2d")
 
+const canvas =
 
+    document.getElementById("canvas")
 
 const ctx =
 
@@ -241,6 +239,7 @@ let sending = false
 // =====================================================
 // CAMERA
 // =====================================================
+
 async function startCamera(){
 
     try{
@@ -318,43 +317,25 @@ async function startCamera(){
         // PLAY VIDEO
         // =====================================
 
-        try{
+        await video.play()
 
-            await video.play()
+        console.log(
+            "VIDEO PLAYING"
+        )
 
-            console.log(
-                "VIDEO PLAYING"
-            )
+        debugDiv.innerHTML =
 
-            debugDiv.innerHTML =
-
-                "camera success"
-                +
-                "<br><br>"
-                +
-                "VIDEO SIZE = "
-                +
-                video.videoWidth
-                +
-                " x "
-                +
-                video.videoHeight
-
-        }catch(err){
-
-            console.log(
-                "PLAY ERROR",
-                err
-            )
-
-            debugDiv.innerHTML =
-
-                "PLAY ERROR"
-                +
-                "<br><br>"
-                +
-                err
-        }
+            "camera success"
+            +
+            "<br><br>"
+            +
+            "VIDEO SIZE = "
+            +
+            video.videoWidth
+            +
+            " x "
+            +
+            video.videoHeight
 
     }catch(e){
 
@@ -374,6 +355,38 @@ async function startCamera(){
         resultDiv.innerHTML =
             "camera denied"
     }
+}
+
+// =====================================================
+// PREVIEW LOOP
+// =====================================================
+
+function startPreview(){
+
+    setInterval(
+
+        ()=>{
+
+            if(video.readyState >= 2){
+
+                previewCtx.drawImage(
+
+                    video,
+
+                    0,
+
+                    0,
+
+                    640,
+
+                    480
+                )
+            }
+
+        },
+
+        30
+    )
 }
 
 // =====================================================
@@ -575,37 +588,18 @@ async function init(){
         // =====================================
 
         await startCamera()
-        
-        setInterval(
 
-    ()=>{
+        // =====================================
+        // START PREVIEW
+        // =====================================
 
-        if(video.readyState >= 2){
-
-            previewCtx.drawImage(
-
-                video,
-
-                0,
-
-                0,
-
-                640,
-
-                480
-            )
-        }
-
-    },
-
-    30
-)
+        startPreview()
 
         resultDiv.innerHTML =
             "AI READY"
 
         // =====================================
-        // LOOP
+        // AI LOOP
         // =====================================
 
         setInterval(
