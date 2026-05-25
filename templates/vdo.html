@@ -1,586 +1,185 @@
 <!DOCTYPE html>
 <html>
-
 <head>
-
 <meta charset="UTF-8">
 
-<title>Realtime AI</title>
+<title>LIFF Camera AI</title>
 
-<meta
-    name="viewport"
-    content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
 
 <script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
 
 <style>
-
-html,
-body{
-
+html,body{
     margin:0;
     padding:0;
-
     width:100%;
     height:100%;
-
-    overflow:hidden;
-
     background:black;
-
+    overflow:hidden;
     font-family:Arial;
 }
 
-#preview{
-
-    position:fixed;
-
-    top:0;
-    left:0;
-
+#video{
     width:100vw;
     height:100vh;
-
-    background:black;
-
     object-fit:cover;
 }
 
-#overlay{
-
+#ui{
     position:fixed;
+    bottom:20px;
+    left:50%;
+    transform:translateX(-50%);
+    display:flex;
+    gap:10px;
+}
 
-    top:0;
-    left:0;
-
-    width:100%;
-    height:100%;
-
-    pointer-events:none;
+button{
+    padding:15px 25px;
+    font-size:18px;
+    border:none;
+    border-radius:12px;
+    background:#06c755;
+    color:white;
 }
 
 #result{
-
-    position:absolute;
-
-    bottom:40px;
-
-    left:50%;
-
-    transform:translateX(-50%);
-
-    font-size:70px;
-
-    font-weight:bold;
-
-    color:#00ff00;
-
-    text-shadow:
-        0 0 10px black,
-        0 0 20px black;
-
-    text-align:center;
-}
-
-#debug{
-
-    position:absolute;
-
-    top:20px;
-
-    left:20px;
-
-    color:white;
-
-    font-size:18px;
-
-    text-shadow:
-        0 0 5px black;
-}
-
-#startBtn{
-
     position:fixed;
-
-    z-index:9999;
-
-    top:50%;
-
-    left:50%;
-
-    transform:translate(-50%, -50%);
-
-    padding:20px 40px;
-
-    font-size:30px;
-
-    border:none;
-
-    border-radius:20px;
-
-    background:#06c755;
-
+    top:20px;
+    left:20px;
     color:white;
-
-    cursor:pointer;
+    font-size:20px;
+    text-shadow:0 0 5px black;
 }
-
 </style>
-
 </head>
 
 <body>
 
-<!-- ========================================= -->
-<!-- HIDDEN VIDEO -->
-<!-- ========================================= -->
+<!-- ================= VIDEO STREAM ================= -->
+<video id="video" autoplay playsinline muted></video>
 
-<video
+<!-- ================= RESULT ================= -->
+<div id="result">Ready</div>
 
-    id="video"
-
-    autoplay
-
-    muted
-
-    playsinline
-
-    webkit-playsinline
-
-    style="display:none;">
-
-</video>
-
-<!-- ========================================= -->
-<!-- FULLSCREEN PREVIEW -->
-<!-- ========================================= -->
-
-<canvas
-
-    id="preview"
-
-    width="640"
-
-    height="480">
-
-</canvas>
-
-<!-- ========================================= -->
-<!-- OVERLAY -->
-<!-- ========================================= -->
-
-<div id="overlay">
-
-    <div id="debug">
-
-        waiting...
-
-    </div>
-
-    <div id="result">
-
-        loading...
-
-    </div>
-
+<!-- ================= BUTTONS ================= -->
+<div id="ui">
+    <button onclick="startCamera()">Start</button>
+    <button onclick="takePhoto()">Capture</button>
 </div>
 
-<!-- ========================================= -->
-<!-- START BUTTON -->
-<!-- ========================================= -->
-
-<button
-
-    id="startBtn"
-
-    onclick="init()">
-
-    START AI
-
-</button>
-
-<!-- ========================================= -->
-<!-- AI CANVAS -->
-<!-- ========================================= -->
-
-<canvas
-
-    id="canvas"
-
-    width="224"
-
-    height="224"
-
-    style="display:none;">
-
-</canvas>
+<!-- ================= CANVAS (HIDDEN) ================= -->
+<canvas id="canvas" width="224" height="224" style="display:none;"></canvas>
 
 <script>
 
-// =====================================================
-// CONFIG
-// =====================================================
+// ================= CONFIG =================
+const LIFF_ID = "2010144029-njNgt99E";
+const API_URL = "https://gitbackend-416424538655.asia-southeast3.run.app";
 
-const LIFF_ID =
+// ================= ELEMENTS =================
+const video = document.getElementById("video");
+const canvas = document.getElementById("canvas");
+const ctx = canvas.getContext("2d");
+const result = document.getElementById("result");
 
-    "2010144029-njNgt99E"
+let stream = null;
 
-const API_URL =
+// ================= LIFF INIT =================
+async function initLiff(){
 
-    "https://gitbackend-416424538655.asia-southeast3.run.app"
+    await liff.init({ liffId: LIFF_ID });
 
-// =====================================================
-// PARAMS
-// =====================================================
+    if (liff.isInClient()) {
+        liff.openWindow({
+            url: window.location.href,
+            external: true
+        });
+        return;
+    }
 
-const params =
+    console.log("LIFF ready");
+}
 
-    new URLSearchParams(
-        window.location.search
-    )
+initLiff();
 
-const project =
-
-    params.get("project")
-
-console.log(
-    "PROJECT =",
-    project
-)
-
-// =====================================================
-// ELEMENTS
-// =====================================================
-
-const video =
-
-    document.getElementById("video")
-
-const preview =
-
-    document.getElementById("preview")
-
-const previewCtx =
-
-    preview.getContext("2d")
-
-const canvas =
-
-    document.getElementById("canvas")
-
-const ctx =
-
-    canvas.getContext("2d")
-
-const resultDiv =
-
-    document.getElementById("result")
-
-const debugDiv =
-
-    document.getElementById("debug")
-
-const startBtn =
-
-    document.getElementById("startBtn")
-
-let sending = false
-
-// =====================================================
-// CAMERA
-// =====================================================
-
+// ================= 3.2 STREAM CAMERA =================
 async function startCamera(){
 
     try{
 
-        debugDiv.innerHTML =
-            "requesting camera..."
+        stream = await navigator.mediaDevices.getUserMedia({
+            video:{ facingMode:"environment" },
+            audio:false
+        });
 
-        const stream =
+        video.srcObject = stream;
 
-            await navigator
-            .mediaDevices
-            .getUserMedia({
+        await video.play();
 
-                video:{
-                    facingMode:"environment"
-                },
-
-                audio:false
-            })
-
-        video.srcObject = stream
-
-        video.muted = true
-
-        await video.play()
-
-        debugDiv.innerHTML =
-
-            "camera success"
-            +
-            "<br>"
-            +
-            video.videoWidth
-            +
-            " x "
-            +
-            video.videoHeight
+        result.innerText = "Camera ON";
 
     }catch(e){
-
-        console.log(e)
-
-        debugDiv.innerHTML =
-
-            "CAMERA ERROR"
-            +
-            "<br><br>"
-            +
-            e
-
-        resultDiv.innerHTML =
-            "camera denied"
+        result.innerText = "Camera ERROR: " + e;
     }
 }
 
-// =====================================================
-// PREVIEW LOOP
-// =====================================================
+// ================= 3.3 CAPTURE PHOTO =================
+async function takePhoto(){
 
-function startPreview(){
+    if(!video.srcObject) return;
 
-    function draw(){
+    ctx.drawImage(video, 0, 0, 224, 224);
 
-        try{
+    // 🔥 base64 (ตามบทความ)
+    const base64 = canvas.toDataURL("image/png");
 
-            if(video.readyState === 4){
+    result.innerText = "Sending...";
 
-                previewCtx.drawImage(
-
-                    video,
-
-                    0,
-
-                    0,
-
-                    preview.width,
-
-                    preview.height
-                )
-            }
-
-        }catch(e){
-
-            console.log(
-                "PREVIEW ERROR",
-                e
-            )
-        }
-
-        requestAnimationFrame(draw)
-    }
-
-    draw()
+    sendToAI(base64);
 }
 
-// =====================================================
-// SEND FRAME
-// =====================================================
-
-async function sendFrame(){
-
-    if(sending){
-        return
-    }
-
-    if(video.readyState < 2){
-        return
-    }
-
-    sending = true
+// ================= SEND TO BACKEND =================
+async function sendToAI(base64){
 
     try{
 
-        ctx.drawImage(
+        // แปลง base64 -> blob
+        const res = await fetch(base64);
+        const blob = await res.blob();
 
-            video,
+        const form = new FormData();
+        form.append("image", blob, "frame.png");
 
-            0,
+        const r = await fetch(API_URL + "/predict", {
+            method:"POST",
+            body:form
+        });
 
-            0,
-
-            224,
-
-            224
-        )
-
-        const blob =
-
-            await new Promise(
-
-                resolve =>
-
-                    canvas.toBlob(
-
-                        resolve,
-
-                        "image/jpeg",
-
-                        0.7
-                    )
-            )
-
-        const formData =
-            new FormData()
-
-        formData.append(
-            "image",
-            blob,
-            "frame.jpg"
-        )
-
-        formData.append(
-            "project",
-            project
-        )
-
-        const r = await fetch(
-
-            API_URL + "/predict",
-
-            {
-                method:"POST",
-                body:formData
-            }
-        )
-
-        const data =
-            await r.json()
-
-        console.log(data)
+        const data = await r.json();
 
         if(data.status === "success"){
-
-            resultDiv.innerHTML =
-
-                data.label
-                +
-                "<br>"
-                +
-                Math.round(
-                    data.confidence * 100
-                )
-                +
-                "%"
-
+            result.innerHTML =
+                data.label +
+                "<br>" +
+                Math.round(data.confidence * 100) + "%";
         }else{
-
-            resultDiv.innerHTML =
-                data.message
+            result.innerText = data.message;
         }
 
     }catch(e){
-
-        console.log(e)
-
-        debugDiv.innerHTML =
-
-            "SEND ERROR"
-            +
-            "<br><br>"
-            +
-            e
-
-    }finally{
-
-        sending = false
+        result.innerText = "API ERROR: " + e;
     }
 }
 
-// =====================================================
-// INIT
-// =====================================================
+// ================= STOP CAMERA =================
+function stopCamera(){
 
-async function init(){
-
-    try{
-
-        startBtn.style.display =
-            "none"
-
-        debugDiv.innerHTML =
-            "LIFF INIT..."
-
-        // =====================================
-        // LIFF
-        // =====================================
-
-        await liff.init({
-
-            liffId:LIFF_ID
-        })
-
-        // =====================================
-        // EXTERNAL BROWSER
-        // =====================================
-
-        if(liff.isInClient()){
-
-            debugDiv.innerHTML =
-                "opening external browser..."
-
-            liff.openWindow({
-
-                url:window.location.href,
-
-                external:true
-            })
-
-            return
-        }
-
-        debugDiv.innerHTML =
-            "external browser ready"
-
-        // =====================================
-        // CAMERA
-        // =====================================
-
-        await startCamera()
-
-        // =====================================
-        // PREVIEW
-        // =====================================
-
-        startPreview()
-
-        // =====================================
-        // AI LOOP
-        // =====================================
-
-        setInterval(
-
-            sendFrame,
-
-            1000
-        )
-
-    }catch(e){
-
-        console.log(e)
-
-        debugDiv.innerHTML =
-
-            "INIT ERROR"
-            +
-            "<br><br>"
-            +
-            e
-
-        resultDiv.innerHTML =
-            "init error"
+    if(stream){
+        stream.getTracks().forEach(t => t.stop());
+        video.srcObject = null;
+        result.innerText = "Camera OFF";
     }
 }
 
