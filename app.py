@@ -422,40 +422,7 @@ def push_message(user_id, text):
 
         print("push error:", e)
 #---------------------------------------------------------
-# =========================================================
-# LOAD AI MODEL
-# =========================================================
-# =========================================================
-# LOAD AI MODELS
-# =========================================================
-
-print(os.listdir("."))
-
-print(os.listdir("models"))
-
-models = {}
-
-models["imagenumber"] = tf.keras.models.load_model(
-    "models/imagenumber.h5"
-)
-
-print("imagenumber model loaded")
-
-# =========================================================
-# LABELS
-# =========================================================
-
-labels = {
-
-    "imagenumber": [
-
-        "1",
-        "2"
-    ]
-}
-
-print("LABELS LOADED")
-
+ 
 # =========================================================
 # MAIN ROUTE
 # =========================================================
@@ -539,9 +506,9 @@ def main_route():
                 # VDO
                 # VDO imagenumber
                 # ====================================
-                elif command == "vdo":
+                #elif command == "vdo":
 
-                     return open_vdo(  event,  parts  )                 
+                  #   return open_vdo(  event,  parts  )                 
                 # ====================================
                 # UNKNOWN COMMAND
                 # ====================================
@@ -581,193 +548,8 @@ def main_route():
 
         }), 500
 # =========================================================
-# OPEN VDO AI
-# vdo imagenumber
-# =========================================================
-def open_vdo(event, parts):
-
-    try:
-
-        reply_token = event.get(
-            "replyToken"
-        )
-
-        # ====================================
-        # VALIDATE
-        # ====================================
-
-        if len(parts) < 2:
-
-            reply_message(
-
-                reply_token,
-
-                "รูปแบบ:\n"
-                "vdo imagenumber"
-            )
-
-            return jsonify({
-                "status": "error"
-            })
-
-        # ====================================
-        # PROJECT
-        # ====================================
-
-        project_name = parts[1].lower()
-
-        # ====================================
-        # VDO URL
-        # ====================================
-
-        vdo_url = (
-
-            f"{WORKER_WEBHOOK_URL}"
-            f"/vdo?project={project_name}"
-        )
-
-        print("VDO URL =", vdo_url)
-
-        # ====================================
-        # REPLY
-        # ====================================
-
-        msg = (
-            "เปิด VDO AI\n\n"
-            f"PROJECT: {project_name}\n\n"
-            f"{vdo_url}"
-        )
-
-        print(msg)
-
-        reply_message(
-            reply_token,
-            msg
-        )
-
-        return jsonify({
-            "status": "success"
-        })
-
-    except Exception as e:
-
-        traceback.print_exc()
-
-        return jsonify({
-
-            "status": "error",
-
-            "message": str(e)
-
-        }), 500
-#---------------------------------------
-# =========================================================
-# VDO PAGE
-# =========================================================
-@app.route("/vdo")
-def vdo_page():
-
-    project = request.args.get(
-        "project",
-        "imagenumber"
-    )
-
-    return render_template(
-
-        "vdo.html",
-
-        project=project
-    )
-        #===========================================
-@app.route("/predict", methods=["POST"])
-def predict():
-
-    try:
-
-        file = request.files["image"]
-
-        project = request.form.get(
-            "project"
-        )
-
-        print(
-            "PROJECT =",
-            project
-        )
-
-        # ====================================
-        # LOAD MODEL
-        # ====================================
-
-        model = models[project]
-
-        class_names = labels[project]
-
-        # ====================================
-        # IMAGE
-        # ====================================
-
-        image = Image.open(
-            file.stream
-        )
-
-        image = image.convert("RGB")
-
-        image = image.resize(
-            (224, 224)
-        )
-
-        img_array = np.array(image)
-
-        img_array = img_array / 255.0
-
-        img_array = np.expand_dims(
-
-            img_array,
-
-            axis=0
-        )
-
-        # ====================================
-        # PREDICT
-        # ====================================
-
-        prediction = model.predict(
-            img_array
-        )
-
-        index = np.argmax(
-            prediction
-        )
-
-        confidence = float(
-            prediction[0][index]
-        )
-
-        label = class_names[index]
-
-        return jsonify({
-
-            "label":
-                label,
-
-            "confidence":
-                confidence
-        })
-
-    except Exception as e:
-
-        traceback.print_exc()
-
-        return jsonify({
-
-            "status":
-                "error",
-
-            "message":
-                str(e)
-
-        }), 500    
+ 
+   
 # =========================================================
 # IMAGE COLOR
 # imagecolor red
