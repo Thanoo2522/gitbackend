@@ -94,19 +94,11 @@ button{
 <!-- ========================================= -->
 
 <video
-
     id="video"
-
     autoplay
-
     muted
-
     playsinline
-
-    webkit-playsinline
-
-    controls>
-
+    webkit-playsinline>
 </video>
 
 <!-- ========================================= -->
@@ -227,7 +219,6 @@ let sending = false
 // =====================================================
 // CAMERA
 // =====================================================
-
 async function startCamera(){
 
     try{
@@ -302,53 +293,45 @@ async function startCamera(){
             "metadata loaded"
 
         // =====================================
-        // FORCE PLAY
+        // PLAY VIDEO
         // =====================================
 
-        const playPromise =
-            video.play()
+        try{
 
-        if(playPromise !== undefined){
+            await video.play()
 
-            playPromise
+            console.log(
+                "VIDEO PLAYING"
+            )
 
-            .then(()=>{
+            debugDiv.innerHTML =
 
-                console.log(
-                    "VIDEO PLAYING"
-                )
+                "camera success"
+                +
+                "<br><br>"
+                +
+                "VIDEO SIZE = "
+                +
+                video.videoWidth
+                +
+                " x "
+                +
+                video.videoHeight
 
-                debugDiv.innerHTML =
+        }catch(err){
 
-                    "camera success"
-                    +
-                    "<br><br>"
-                    +
-                    "VIDEO SIZE = "
-                    +
-                    video.videoWidth
-                    +
-                    " x "
-                    +
-                    video.videoHeight
+            console.log(
+                "PLAY ERROR",
+                err
+            )
 
-            })
+            debugDiv.innerHTML =
 
-            .catch(err=>{
-
-                console.log(
-                    "PLAY ERROR",
-                    err
-                )
-
-                debugDiv.innerHTML =
-
-                    "PLAY ERROR"
-                    +
-                    "<br><br>"
-                    +
-                    err
-            })
+                "PLAY ERROR"
+                +
+                "<br><br>"
+                +
+                err
         }
 
     }catch(e){
