@@ -137,29 +137,45 @@ async function startCamera(){
 
     try{
 
-        debug.innerText = "Request camera...";
+        debug.innerText = "request camera...";
 
         stream = await navigator.mediaDevices.getUserMedia({
-            video: { facingMode: "environment" },
+            video: {
+                facingMode: { ideal: "environment" }
+            },
             audio: false
         });
 
         video.srcObject = stream;
 
-        // 🔥 FIX 1: wait metadata
-        await new Promise(res => {
-            video.onloadedmetadata = () => res();
+        // 🔥 สำคัญมาก: force load
+        await video.load?.();
+
+        await new Promise(resolve => {
+
+            video.onloadedmetadata = () => {
+                console.log("metadata ready");
+                resolve();
+            };
+
         });
 
         await video.play();
 
+        // 🔥 กัน Chrome/iOS block render
+        setTimeout(() => {
+
+            console.log("video state:", video.readyState);
+            console.log("size:", video.videoWidth, video.videoHeight);
+
+        }, 500);
+
         debug.innerText =
-            "Camera OK " +
-            video.videoWidth +
-            "x" +
-            video.videoHeight;
+            "CAMERA OK " +
+            video.videoWidth + "x" + video.videoHeight;
 
     }catch(e){
+
         console.log(e);
         debug.innerText = "CAMERA ERROR: " + e;
     }
