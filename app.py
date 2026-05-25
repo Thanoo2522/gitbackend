@@ -1,5 +1,6 @@
 from click import command
 from flask import Flask, request, jsonify
+from flask import render_template
 
 import os
 import json
@@ -590,6 +591,10 @@ def main_route():
 # OPEN VDO AI
 # vdo imagenumber
 # =========================================================
+# =========================================================
+# OPEN VDO AI
+# vdo imagenumber
+# =========================================================
 def open_vdo(event, parts):
 
     try:
@@ -623,19 +628,19 @@ def open_vdo(event, parts):
         project_name = parts[1].lower()
 
         # ------------------------------------
-        # LIFF URL
+        # VDO URL
         # ------------------------------------
 
-        liff_url = (
+        vdo_url = (
 
-            f"https://liff.line.me/{LIFF_ID}"
-            f"?mode=vdo"
-            f"&project={project_name}"
+            f"{WORKER_WEBHOOK_URL}"
+            f"/vdo"
+            f"?project={project_name}"
         )
 
         print(
-            "LIFF URL =",
-            liff_url
+            "VDO URL =",
+            vdo_url
         )
 
         # ------------------------------------
@@ -648,7 +653,7 @@ def open_vdo(event, parts):
 
             f"เปิด VDO AI\n\n"
             f"PROJECT: {project_name}\n\n"
-            f"{liff_url}"
+            f"{vdo_url}"
         )
 
         return jsonify({
@@ -666,6 +671,24 @@ def open_vdo(event, parts):
             "message": str(e)
 
         }), 500
+#---------------------------------------
+# =========================================================
+# VDO PAGE
+# =========================================================
+@app.route("/vdo")
+def vdo_page():
+
+    project = request.args.get(
+        "project",
+        "imagenumber"
+    )
+
+    return render_template(
+
+        "vdo.html",
+
+        project=project
+    )
         #===========================================
 @app.route("/predict", methods=["POST"])
 def predict():
