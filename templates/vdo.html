@@ -3,13 +3,14 @@
 <head>
 <meta charset="UTF-8">
 
-<title>LIFF Camera AI</title>
+<title>LIFF AI Camera</title>
 
-<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 
 <script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
 
 <style>
+
 html,body{
     margin:0;
     padding:0;
@@ -20,19 +21,46 @@ html,body{
     font-family:Arial;
 }
 
+/* VIDEO FULLSCREEN */
 #video{
+    position:fixed;
+    top:0;
+    left:0;
     width:100vw;
     height:100vh;
     object-fit:cover;
 }
 
+/* RESULT */
+#result{
+    position:fixed;
+    top:20px;
+    left:20px;
+    color:white;
+    font-size:20px;
+    text-shadow:0 0 5px black;
+    z-index:10;
+}
+
+/* DEBUG */
+#debug{
+    position:fixed;
+    top:60px;
+    left:20px;
+    color:yellow;
+    font-size:14px;
+    z-index:10;
+}
+
+/* BUTTONS */
 #ui{
     position:fixed;
-    bottom:20px;
+    bottom:30px;
     left:50%;
     transform:translateX(-50%);
     display:flex;
     gap:10px;
+    z-index:20;
 }
 
 button{
@@ -44,32 +72,25 @@ button{
     color:white;
 }
 
-#result{
-    position:fixed;
-    top:20px;
-    left:20px;
-    color:white;
-    font-size:20px;
-    text-shadow:0 0 5px black;
-}
 </style>
 </head>
 
 <body>
 
-<!-- ================= VIDEO STREAM ================= -->
+<!-- ================= VIDEO ================= -->
 <video id="video" autoplay playsinline muted></video>
 
-<!-- ================= RESULT ================= -->
-<div id="result">Ready</div>
+<!-- ================= UI ================= -->
+<div id="result">READY</div>
+<div id="debug">waiting...</div>
 
-<!-- ================= BUTTONS ================= -->
 <div id="ui">
-    <button onclick="startCamera()">Start</button>
-    <button onclick="takePhoto()">Capture</button>
+    <button onclick="startCamera()">START</button>
+    <button onclick="capture()">CAPTURE</button>
+    <button onclick="stopCamera()">STOP</button>
 </div>
 
-<!-- ================= CANVAS (HIDDEN) ================= -->
+<!-- ================= CANVAS ================= -->
 <canvas id="canvas" width="224" height="224" style="display:none;"></canvas>
 
 <script>
@@ -82,82 +103,97 @@ const API_URL = "https://gitbackend-416424538655.asia-southeast3.run.app";
 const video = document.getElementById("video");
 const canvas = document.getElementById("canvas");
 const ctx = canvas.getContext("2d");
+
 const result = document.getElementById("result");
+const debug = document.getElementById("debug");
 
 let stream = null;
+let sending = false;
 
 // ================= LIFF INIT =================
 async function initLiff(){
+    try{
+        await liff.init({ liffId: LIFF_ID });
 
-    await liff.init({ liffId: LIFF_ID });
+        debug.innerText = "LIFF READY";
 
-    if (liff.isInClient()) {
-        liff.openWindow({
-            url: window.location.href,
-            external: true
-        });
-        return;
+        // ถ้าอยู่ใน LINE ให้เปิด external browser
+        if(liff.isInClient()){
+            liff.openWindow({
+                url: window.location.href,
+                external: true
+            });
+        }
+
+    }catch(e){
+        debug.innerText = "LIFF ERROR: " + e;
     }
-
-    console.log("LIFF ready");
 }
 
 initLiff();
 
-// ================= 3.2 STREAM CAMERA =================
+// ================= CAMERA START =================
 async function startCamera(){
 
     try{
 
+        debug.innerText = "Request camera...";
+
         stream = await navigator.mediaDevices.getUserMedia({
-            video:{ facingMode:"environment" },
-            audio:false
+            video: { facingMode: "environment" },
+            audio: false
         });
 
         video.srcObject = stream;
 
+        // 🔥 FIX 1: wait metadata
+        await new Promise(res => {
+            video.onloadedmetadata = () => res();
+        });
+
         await video.play();
 
-        result.innerText = "Camera ON";
+        debug.innerText =
+            "Camera OK " +
+            video.videoWidth +
+            "x" +
+            video.videoHeight;
 
     }catch(e){
-        result.innerText = "Camera ERROR: " + e;
+        console.log(e);
+        debug.innerText = "CAMERA ERROR: " + e;
     }
 }
 
-// ================= 3.3 CAPTURE PHOTO =================
-async function takePhoto(){
+// ================= CAPTURE =================
+async function capture(){
 
-    if(!video.srcObject) return;
-
-    ctx.drawImage(video, 0, 0, 224, 224);
-
-    // 🔥 base64 (ตามบทความ)
-    const base64 = canvas.toDataURL("image/png");
-
-    result.innerText = "Sending...";
-
-    sendToAI(base64);
-}
-
-// ================= SEND TO BACKEND =================
-async function sendToAI(base64){
+    if(!video.srcObject){
+        debug.innerText = "No camera";
+        return;
+    }
 
     try{
 
-        // แปลง base64 -> blob
-        const res = await fetch(base64);
-        const blob = await res.blob();
+        ctx.drawImage(video, 0, 0, 224, 224);
+
+        const blob = await new Promise(res =>
+            canvas.toBlob(res, "image/jpeg", 0.8)
+        );
+
+        result.innerText = "Sending...";
 
         const form = new FormData();
-        form.append("image", blob, "frame.png");
+        form.append("image", blob, "frame.jpg");
 
         const r = await fetch(API_URL + "/predict", {
-            method:"POST",
-            body:form
+            method: "POST",
+            body: form
         });
 
         const data = await r.json();
+
+        console.log(data);
 
         if(data.status === "success"){
             result.innerHTML =
@@ -169,7 +205,8 @@ async function sendToAI(base64){
         }
 
     }catch(e){
-        result.innerText = "API ERROR: " + e;
+        console.log(e);
+        result.innerText = "SEND ERROR: " + e;
     }
 }
 
@@ -178,8 +215,10 @@ function stopCamera(){
 
     if(stream){
         stream.getTracks().forEach(t => t.stop());
+        stream = null;
         video.srcObject = null;
-        result.innerText = "Camera OFF";
+        result.innerText = "STOPPED";
+        debug.innerText = "camera off";
     }
 }
 
