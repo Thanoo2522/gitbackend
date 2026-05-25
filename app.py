@@ -429,9 +429,9 @@ def push_message(user_id, text):
 # LOAD AI MODELS
 # =========================================================
 
-print("=" * 50)
-print("LOAD AI MODELS")
-print("=" * 50)
+print(os.listdir("."))
+
+print(os.listdir("models"))
 
 models = {}
 
