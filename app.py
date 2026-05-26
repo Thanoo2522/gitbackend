@@ -762,7 +762,8 @@ def main_route():
                         "ไม่รู้จัก command"
                     )
 
-            # ====================================ฟ            # IMAGE MESSAGE
+            # ====================================
+            # IMAGE MESSAGE
             # ====================================
             elif message_type == "image":
 
@@ -785,20 +786,6 @@ def main_route():
             "message": str(e)
 
         }), 500
-
-
-@app.route("/vdo-control", methods=["POST"])
-def vdo_control():
-
-    body = request.get_json()
-
-    command = body.get("command")
-
-    # future expand (ยังไม่ใช้ตอนนี้)
-    return jsonify({
-        "status": "ok",
-        "command": command
-    })        
 # =========================================================
 # OPEN VDO AI
 # vdo imagenumber
@@ -884,21 +871,19 @@ def open_vdo(event, parts):
 # VDO PAGE
 # =========================================================
 @app.route("/vdo")
-def vdo():
+def vdo_page():
 
-    project = request.args.get("project", "imagenumber")
-    user_id = request.args.get("user_id")
+    project = request.args.get(
+        "project",
+        "imagenumber"
+    )
 
-    if not user_id:
-        return "missing user", 403
+    return render_template(
 
-    doc = worker_db.collection("user").document(user_id).get()
+        "vdo.html",
 
-    # ❗ เปลี่ยน behavior อย่างเดียว (ไม่ลบ logic)
-    if not doc.exists:
-        return "please register via hub", 403
-
-    return render_template("vdo.html", project=project, user_id=user_id)
+        project=project
+    )
         #===========================================
   
 # =========================================================
