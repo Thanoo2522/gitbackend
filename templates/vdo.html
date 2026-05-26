@@ -122,26 +122,18 @@ let predictLoop = null;
 
 const video = document.getElementById("video");
 
-const canvas = document.getElementById("canvas");
-
 const resultDiv = document.getElementById("result");
 
 // =====================================================
-// MODEL PATH
-// VSCode Folder:
-//
-// static/
-// └── models_imagenumber/
-//     ├── model.json
-//     ├── metadata.json
-//     └── weights.bin
+// IMPORTANT
+// ต้องอยู่ใน static/models_imagenumber/
 // =====================================================
 
 const MODEL_URL =
-    "models_imagenumber/model.json";
+    "/static/models_imagenumber/model.json";
 
 const METADATA_URL =
-    "models_imagenumber/metadata.json";
+    "/static/models_imagenumber/metadata.json";
 
 // =====================================================
 // INIT LIFF
@@ -151,7 +143,6 @@ async function initLiff(){
 
     try{
 
-        // กัน init ซ้ำ
         if(window.liffLoaded){
             return;
         }
@@ -188,6 +179,16 @@ async function loadModel(){
         resultDiv.innerHTML =
             "Loading AI Model...";
 
+        console.log(
+            "MODEL URL =",
+            MODEL_URL
+        );
+
+        console.log(
+            "METADATA URL =",
+            METADATA_URL
+        );
+
         model = await tmImage.load(
 
             MODEL_URL,
@@ -203,7 +204,10 @@ async function loadModel(){
 
     }catch(err){
 
-        console.log(err);
+        console.log(
+            "LOAD MODEL ERROR:",
+            err
+        );
 
         resultDiv.innerHTML =
             "โหลด model ไม่สำเร็จ";
@@ -218,7 +222,6 @@ async function startCamera(){
 
     try{
 
-        // กันเปิดซ้ำ
         if(stream){
             return;
         }
@@ -253,7 +256,7 @@ async function startCamera(){
 }
 
 // =====================================================
-// PREDICT
+// PREDICT FRAME
 // =====================================================
 
 async function predictFrame(){
@@ -268,18 +271,15 @@ async function predictFrame(){
             return;
         }
 
-        // predict realtime
         const predictions =
             await model.predict(video);
 
-        // sort มาก -> น้อย
         predictions.sort(
 
             (a,b)=>
                 b.probability - a.probability
         );
 
-        // show all
         let html = "";
 
         predictions.forEach(p => {
@@ -311,31 +311,26 @@ async function predictFrame(){
 }
 
 // =====================================================
-// START REALTIME LOOP
-// 2 FPS
+// START AI
 // =====================================================
 
 async function startRealtimeAI(){
 
     try{
 
-        // กันเปิดซ้ำ
         if(running){
             return;
         }
 
         running = true;
 
-        // load model
         if(!model){
 
             await loadModel();
         }
 
-        // open camera
         await startCamera();
 
-        // realtime loop
         predictLoop = setInterval(
 
             async()=>{
@@ -344,7 +339,7 @@ async function startRealtimeAI(){
 
             },
 
-            500 // 2 frame/sec
+            500
         );
 
     }catch(err){
@@ -361,7 +356,6 @@ function stopRealtimeAI(){
 
     running = false;
 
-    // stop interval
     if(predictLoop){
 
         clearInterval(
@@ -371,7 +365,6 @@ function stopRealtimeAI(){
         predictLoop = null;
     }
 
-    // stop camera
     if(stream){
 
         stream.getTracks()
