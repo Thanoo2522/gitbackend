@@ -125,15 +125,25 @@ const video = document.getElementById("video");
 const resultDiv = document.getElementById("result");
 
 // =====================================================
-// IMPORTANT
-// ต้องอยู่ใน static/models_imagenumber/
+// FIREBASE STORAGE MODEL
+//
+// baselineoa.firebasestorage.app
+//
+// Folder:
+// models_imagenumber/
+//      model.json
+//      metadata.json
+//      weights.bin
 // =====================================================
 
+// IMPORTANT:
+// ต้องเปิด public read ใน Firebase Storage ก่อน
+
 const MODEL_URL =
-    "/static/models_imagenumber/model.json";
+"https://firebasestorage.googleapis.com/v0/b/baselineoa.firebasestorage.app/o/models_imagenumber%2Fmodel.json?alt=media";
 
 const METADATA_URL =
-    "/static/models_imagenumber/metadata.json";
+"https://firebasestorage.googleapis.com/v0/b/baselineoa.firebasestorage.app/o/models_imagenumber%2Fmetadata.json?alt=media";
 
 // =====================================================
 // INIT LIFF
@@ -143,6 +153,7 @@ async function initLiff(){
 
     try{
 
+        // กัน init ซ้ำ
         if(window.liffLoaded){
             return;
         }
@@ -222,6 +233,7 @@ async function startCamera(){
 
     try{
 
+        // กันเปิดซ้ำ
         if(stream){
             return;
         }
@@ -271,15 +283,18 @@ async function predictFrame(){
             return;
         }
 
+        // realtime predict
         const predictions =
             await model.predict(video);
 
+        // sort มาก -> น้อย
         predictions.sort(
 
             (a,b)=>
                 b.probability - a.probability
         );
 
+        // build html
         let html = "";
 
         predictions.forEach(p => {
@@ -311,26 +326,30 @@ async function predictFrame(){
 }
 
 // =====================================================
-// START AI
+// START REALTIME AI
 // =====================================================
 
 async function startRealtimeAI(){
 
     try{
 
+        // กันเปิดซ้ำ
         if(running){
             return;
         }
 
         running = true;
 
+        // load model
         if(!model){
 
             await loadModel();
         }
 
+        // start camera
         await startCamera();
 
+        // realtime 2 FPS
         predictLoop = setInterval(
 
             async()=>{
@@ -356,6 +375,7 @@ function stopRealtimeAI(){
 
     running = false;
 
+    // stop loop
     if(predictLoop){
 
         clearInterval(
@@ -365,6 +385,7 @@ function stopRealtimeAI(){
         predictLoop = null;
     }
 
+    // stop camera
     if(stream){
 
         stream.getTracks()
