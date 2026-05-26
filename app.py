@@ -1,5 +1,14 @@
-from flask import Flask, request, jsonify, render_template
-import os, json, traceback, requests, time, threading
+#from click import command
+from flask import Flask, request, jsonify
+from flask import render_template
+
+import os
+import json
+import traceback
+import requests
+import time
+import threading
+
 from datetime import datetime
 
 import firebase_admin
@@ -7,198 +16,1777 @@ from firebase_admin import credentials, firestore, storage
 from PIL import Image
 from io import BytesIO
 import uuid
+import base64
+import zipfile
+#------------- เกี่ยวกับ AI Model
 import numpy as np
 import tensorflow as tf
-import zipfile
-
+# =========================================================
+# FLASK
+# =========================================================
 app = Flask(__name__)
+
+# =========================================================
+# =========================================================
+# MODELS
+# =========================================================
+
+models = {}
+
+# =========================================================
+# LABELS
+# =========================================================
+
+labels = {
+
+    "imagenumber": [
+
+        "1",
+        "2"
+    ]
+}
+
+print("LABELS LOADED")
+
+# =========================================================
+# LOAD MODEL (LAZY LOAD)
+# =========================================================
+
+def get_model(project):
+
+    # ====================================
+    # MODEL ALREADY LOADED
+    # ====================================
+
+    if project in models:
+
+        print(f"{project} model already loaded")
+
+        return models[project]
+
+    # ====================================
+    # LOAD NEW MODEL
+    # ====================================
+
+    print("=" * 50)
+    print(f"LOADING MODEL : {project}")
+    print("=" * 50)
+
+    model_path = f"models/{project}.h5"
+
+    print("MODEL PATH =", model_path)
+
+    # ====================================
+    # CHECK FILE
+    # ====================================
+
+    if not os.path.exists(model_path):
+
+        raise Exception(
+            f"Model file not found : {model_path}"
+        )
+
+    # ====================================
+    # LOAD MODEL
+    # ====================================
+
+    model = tf.keras.models.load_model(
+        model_path
+    )
+
+    models[project] = model
+
+    print(f"{project} model loaded success")
+
+    return model
+
+# =========================================================
+# PREDICT
+# =========================================================
+
+@app.route("/predict", methods=["POST"])
+def predict():
+
+    try:
+
+        # ====================================
+        # CHECK IMAGE
+        # ====================================
+
+        if "image" not in request.files:
+
+            return jsonify({
+
+                "status":
+                    "error",
+
+                "message":
+                    "No image uploaded"
+
+            }), 400
+
+        # ====================================
+        # GET DATA
+        # ====================================
+
+        file = request.files["image"]
+
+        project = request.form.get(
+            "project"
+        )
+
+        print("=" * 50)
+        print("PREDICT REQUEST")
+        print("=" * 50)
+
+        print(
+            "PROJECT =",
+            project
+        )
+
+        # ====================================
+        # CHECK PROJECT
+        # ====================================
+
+        if not project:
+
+            return jsonify({
+
+                "status":
+                    "error",
+
+                "message":
+                    "Project is required"
+
+            }), 400
+
+        # ====================================
+        # CHECK LABELS
+        # ====================================
+
+        if project not in labels:
+
+            return jsonify({
+
+                "status":
+                    "error",
+
+                "message":
+                    f"Unknown project : {project}"
+
+            }), 400
+
+        # ====================================
+        # LOAD MODEL
+        # ====================================
+
+        model = get_model(project)
+
+        class_names = labels[project]
+
+        # ====================================
+        # IMAGE PROCESS
+        # ====================================
+
+        image = Image.open(
+            file.stream
+        )
+
+        image = image.convert("RGB")
+
+        image = image.resize(
+            (224, 224)
+        )
+
+        img_array = np.array(image)
+
+        img_array = img_array / 255.0
+
+        img_array = np.expand_dims(
+
+            img_array,
+
+            axis=0
+        )
+
+        print("IMAGE READY")
+
+        # ====================================
+        # PREDICT
+        # ====================================
+
+        prediction = model.predict(
+            img_array
+        )
+
+        index = np.argmax(
+            prediction
+        )
+
+        confidence = float(
+            prediction[0][index]
+        )
+
+        label = class_names[index]
+
+        print(
+            "RESULT =",
+            label,
+            confidence
+        )
+
+        # ====================================
+        # RESPONSE
+        # ====================================
+
+        return jsonify({
+
+            "status":
+                "success",
+
+            "label":
+                label,
+
+            "confidence":
+                confidence
+        })
+
+    except Exception as e:
+
+        traceback.print_exc()
+
+        return jsonify({
+
+            "status":
+                "error",
+
+            "message":
+                str(e)
+
+        }), 500
+# =========================================================
+# HEARTBEAT STATE
+# =========================================================
+heartbeat_started = False
 
 # =========================================================
 # ENV
 # =========================================================
-HUB_FIREBASE_KEY = os.environ.get("HUB_FIREBASE_KEY")
-WORKER_FIREBASE_KEY = os.environ.get("WORKER_FIREBASE_KEY")
-LINE_CHANNEL_ACCESS_TOKEN = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN")
-SERVER_ID = os.environ.get("SERVER_ID")
-WORKER_WEBHOOK_URL = os.environ.get("WORKER_WEBHOOK_URL")
+HUB_FIREBASE_KEY = os.environ.get(
+    "HUB_FIREBASE_KEY"
+)
+
+WORKER_FIREBASE_KEY = os.environ.get(
+    "WORKER_FIREBASE_KEY"
+)
+
+LINE_CHANNEL_ACCESS_TOKEN = os.environ.get(
+    "LINE_CHANNEL_ACCESS_TOKEN"
+)
+
+SERVER_ID = os.environ.get(
+    "SERVER_ID"
+)
+
+WORKER_WEBHOOK_URL = os.environ.get(
+    "WORKER_WEBHOOK_URL"
+)
+
+LIFF_ID = os.environ.get("LIFF_ID")
 
 # =========================================================
-# FIREBASE INIT
+# VALIDATION
 # =========================================================
-hub_cred = credentials.Certificate(json.loads(HUB_FIREBASE_KEY))
-hub_app = firebase_admin.initialize_app(hub_cred, name="hub")
-hub_db = firestore.client(hub_app)
+required_env = {
 
-worker_cred = credentials.Certificate(json.loads(WORKER_FIREBASE_KEY))
+    "HUB_FIREBASE_KEY":
+        HUB_FIREBASE_KEY,
+
+    "WORKER_FIREBASE_KEY":
+        WORKER_FIREBASE_KEY,
+
+    "LINE_CHANNEL_ACCESS_TOKEN":
+        LINE_CHANNEL_ACCESS_TOKEN,
+
+    "SERVER_ID":
+        SERVER_ID,
+
+    "WORKER_WEBHOOK_URL":
+        WORKER_WEBHOOK_URL,
+    "LIFF_ID": LIFF_ID   
+}
+
+for k, v in required_env.items():
+
+    if not v:
+        raise RuntimeError(f"Missing {k}")
+
+# =========================================================
+# FIREBASE
+# =========================================================
+# FIREBASE
+# =========================================================
+
+# ---------------------------------------------------------
+# HUB DB
+# ---------------------------------------------------------
+hub_cred = credentials.Certificate(
+    json.loads(HUB_FIREBASE_KEY)
+)
+
+hub_app = firebase_admin.initialize_app(
+
+    hub_cred,
+
+    name="hub"
+)
+
+hub_db = firestore.client(
+    hub_app
+)
+
+# ---------------------------------------------------------
+# WORKER DB + STORAGE
+# ---------------------------------------------------------
+worker_cred = credentials.Certificate(
+    json.loads(WORKER_FIREBASE_KEY)
+)
+
 worker_app = firebase_admin.initialize_app(
+
     worker_cred,
-    {"storageBucket": "basework-51f3b.firebasestorage.app"},
+
+    {
+        "storageBucket":
+            "basework-51f3b.firebasestorage.app"
+    },
+
     name="worker"
 )
 
-worker_db = firestore.client(worker_app)
-bucket = storage.bucket(app=worker_app)
+worker_db = firestore.client(
+    worker_app
+)
+
+# IMPORTANT
+bucket = storage.bucket(
+    app=worker_app
+)
 
 # =========================================================
-# MODELS
+# LINE API
 # =========================================================
-models = {}
+LINE_REPLY_API = (
+    "https://api.line.me/v2/bot/message/reply"
+)
 
-labels = {
-    "imagenumber": ["1", "2"]
+LINE_PUSH_API = (
+    "https://api.line.me/v2/bot/message/push"
+)
+
+LINE_HEADERS = {
+
+    "Authorization":
+        f"Bearer {LINE_CHANNEL_ACCESS_TOKEN}",
+
+    "Content-Type":
+        "application/json"
 }
 
 # =========================================================
-# HEARTBEAT (UNCHANGED LOGIC)
+# HEARTBEAT LOOP กระตุ้กไปที่ HUB  ให้รู้ว่ายังonline อยู่
 # =========================================================
-def heartbeat():
+def heartbeat_loop():
+
+    print("🔥 HEARTBEAT LOOP STARTED")
 
     while True:
+
         try:
+
+            save_data = {
+
+                "server_id":
+                    SERVER_ID,
+
+                "status":
+                    "online",
+
+                "load_score":
+                    0,
+
+                "cloud_url":
+                    WORKER_WEBHOOK_URL,
+
+                "last_heartbeat":
+                    int(time.time())
+            }
+
             hub_db.collection("hub_system") \
                 .document("server_pool") \
                 .collection("servers") \
                 .document(SERVER_ID) \
-                .set({
-                    "status": "online",
-                    "cloud_url": WORKER_WEBHOOK_URL,
-                    "last_heartbeat": int(time.time())
-                }, merge=True)
+                .set(save_data, merge=True)
+
+            print("✅ HEARTBEAT OK")
 
         except Exception as e:
-            print("heartbeat error", e)
 
+            print("❌ HEARTBEAT ERROR")
+
+            traceback.print_exc()
+
+        # LOOP EVERY 30 SEC
         time.sleep(30)
 
-threading.Thread(target=heartbeat, daemon=True).start()
+# =========================================================
+# START HEARTBEAT
+# =========================================================
+def start_heartbeat_once():
+
+    global heartbeat_started
+
+    if heartbeat_started:
+        return
+
+    heartbeat_started = True
+
+    threading.Thread(
+
+        target=heartbeat_loop,
+
+        daemon=True
+
+    ).start()
+
+    print("🚀 HEARTBEAT STARTED")
+
+# =========================================================
+# START HEARTBEAT ON BOOT
+# =========================================================
+start_heartbeat_once()
 
 # =========================================================
 # HOME
 # =========================================================
 @app.route("/")
 def home():
+
     return f"{SERVER_ID} RUNNING"
 
-
 # =========================================================
-# STRICT VDO (FIX REGISTER LOOP)
-# =========================================================
-@app.route("/vdo")
-def vdo_page():
-
-    project = request.args.get("project", "imagenumber")
-    user_id = request.args.get("user_id")
-
-    if not user_id:
-        return "missing user_id", 403
-
-    doc = worker_db.collection("user").document(user_id).get()
-
-    if not doc.exists:
-        return "NOT REGISTERED", 403
-
-    return render_template("vdo.html", project=project, user_id=user_id)
-
-
-# =========================================================
-# CHECK REGISTER (WORKER)
+# CHECK REGISTER
 # =========================================================
 @app.route("/check-register", methods=["POST"])
 def check_register():
 
-    body = request.get_json(silent=True) or {}
-    user_id = body.get("user_id")
+    try:
 
-    if not user_id:
-        return jsonify({"registered": False})
+        body = request.get_json(
+            silent=True
+        ) or {}
 
-    doc = worker_db.collection("user").document(user_id).get()
+        user_id = body.get("user_id")
 
-    return jsonify({
-        "registered": doc.exists and doc.to_dict().get("register", False)
-    })
+        if not user_id:
 
+            return jsonify({
+                "registered": False
+            })
+
+        doc = worker_db.collection("user") \
+            .document(user_id) \
+            .get()
+
+        if not doc.exists:
+
+            return jsonify({
+                "registered": False
+            })
+
+        data = doc.to_dict()
+
+        return jsonify({
+
+            "registered":
+                data.get("register", False)
+        })
+
+    except Exception:
+
+        traceback.print_exc()
+
+        return jsonify({
+            "registered": False
+        })
 
 # =========================================================
-# REGISTER USER (NO DUPLICATE)
+# REGISTER USER
 # =========================================================
 @app.route("/register-user", methods=["POST"])
 def register_user():
 
     try:
-        body = request.get_json(silent=True) or {}
+
+        body = request.get_json(
+            silent=True
+        ) or {}
+
+        print("REGISTER BODY =", body)
+
         user_id = body.get("user_id")
 
         if not user_id:
-            return jsonify({"status": "error"}), 400
 
-        ref = worker_db.collection("user").document(user_id)
-        doc = ref.get()
+            return jsonify({
 
-        if doc.exists:
-            return jsonify({"status": "success", "message": "already registered"})
+                "status": "error",
 
-        ref.set({
-            "userId": user_id,
-            "fullname": body.get("name", ""),
-            "phone": body.get("phone", ""),
-            "email": body.get("email", ""),
-            "register": True,
-            "worker_id": SERVER_ID,
-            "created_at": datetime.utcnow()
+                "message": "no user_id"
+
+            }), 400
+
+        # ====================================
+        # SAVE USER
+        # ====================================
+
+        worker_db.collection("user") \
+            .document(user_id) \
+            .set({
+
+                "userId":
+                    user_id,
+
+                "fullname":
+                    body.get("name", ""),
+
+                "phone":
+                    body.get("phone", ""),
+
+                "email":
+                    body.get("email", ""),
+
+                "register":
+                    True,
+
+                "worker_id":
+                    SERVER_ID,
+
+                "created_at":
+                    datetime.utcnow()
+            })
+
+        print("✅ USER SAVED")
+
+        return jsonify({
+
+            "status": "success",
+
+            "message": "ลงทะเบียนสำเร็จ"
         })
 
-        return jsonify({"status": "success"})
+    except Exception as e:
+
+        traceback.print_exc()
+
+        return jsonify({
+
+            "status": "error",
+
+            "message": str(e)
+
+        }), 500
+
+# =========================================================
+# LINE HELPERS
+# =========================================================
+def reply_message(reply_token, text):
+
+    try:
+
+        requests.post(
+
+            LINE_REPLY_API,
+
+            headers=LINE_HEADERS,
+
+            json={
+
+                "replyToken":
+                    reply_token,
+
+                "messages": [
+                    {
+                        "type": "text",
+                        "text": text
+                    }
+                ]
+            },
+
+            timeout=10
+        )
 
     except Exception as e:
-        traceback.print_exc()
-        return jsonify({"status": "error", "message": str(e)}), 500
+
+        print("reply error:", e)
+#=====================================
+def push_message(user_id, text):
+
+    try:
+
+        requests.post(
+
+            LINE_PUSH_API,
+
+            headers=LINE_HEADERS,
+
+            json={
+
+                "to":
+                    user_id,
+
+                "messages": [
+                    {
+                        "type": "text",
+                        "text": text
+                    }
+                ]
+            },
+
+            timeout=10
+        )
+
+    except Exception as e:
+
+        print("push error:", e)
+#---------------------------------------------------------
 
 
 # =========================================================
-# MAIN ROUTE (UNCHANGED LOGIC)
+# MAIN ROUTE
 # =========================================================
 @app.route("/main-route", methods=["POST"])
 def main_route():
 
-    body = request.get_json(silent=True) or {}
+    try:
 
-    events = body.get("events", [])
+        body = request.get_json(
+            silent=True
+        ) or {}
 
-    for event in events:
+        print("=" * 50)
+        print("MAIN ROUTE")
+        print(json.dumps(
+            body,
+            indent=2,
+            ensure_ascii=False
+        ))
+        print("=" * 50)
 
-        if event.get("type") != "message":
-            continue
+        events = body.get(
+            "events",
+            []
+        )
 
-        text = event.get("message", {}).get("text", "")
+        for event in events:
 
-        if text.lower() == "ping":
-            return jsonify({"reply": "pong"})
+            if event.get("type") != "message":
+                continue
 
-    return jsonify({"status": "ok"})
+            message = event.get(
+                "message",
+                {}
+            )
 
+            message_type = message.get(
+                "type"
+            )
 
+            # ====================================
+            # TEXT MESSAGE
+            # ====================================
+            if message_type == "text":
+
+                text = message.get(
+                    "text",
+                    ""
+                ).strip()
+
+                parts = text.split(" ")
+
+                command = parts[0].lower()
+
+                # ====================================
+                # IMAGE COLOR
+                # imagecolor red
+                # ====================================
+                if command == "imagecolor":
+
+                    return imagecolor(
+                        event,
+                        parts
+                    )
+
+                # ====================================
+                # IMAGE NUMBER
+                # imagenumber 5
+                # ====================================
+                elif command == "imagenumber":
+
+                    return imagenumber(
+                        event,
+                        parts
+                    )
+                elif command == "download":
+
+                     return download_dataset( event, parts )  
+
+                # ====================================
+                # VDO
+                # VDO imagenumber
+                # ====================================
+                elif command == "vdo":
+
+                     return open_vdo(  event,  parts  )                 
+                # ====================================
+                # UNKNOWN COMMAND
+                # ====================================
+                else:
+
+                    reply_message(
+
+                        event.get(
+                            "replyToken"
+                        ),
+
+                        "ไม่รู้จัก command"
+                    )
+
+            # ====================================ฟ            # IMAGE MESSAGE
+            # ====================================
+            elif message_type == "image":
+
+                return handle_image(
+                    event
+                )
+
+        return jsonify({
+            "status": "success"
+        })
+
+    except Exception as e:
+
+        traceback.print_exc()
+
+        return jsonify({
+
+            "status": "error",
+
+            "message": str(e)
+
+        }), 500
 # =========================================================
-# SAFE VDO LINK GENERATOR (NO LOOP)
+# OPEN VDO AI
+# vdo imagenumber
 # =========================================================
 def open_vdo(event, parts):
 
-    reply_token = event.get("replyToken")
+    try:
 
-    if len(parts) < 2:
-        return jsonify({"error": "bad format"})
+        reply_token = event.get(
+            "replyToken"
+        )
 
-    project = parts[1]
+        # ====================================
+        # VALIDATE
+        # ====================================
 
-    url = f"{WORKER_WEBHOOK_URL}/vdo?project={project}"
+        if len(parts) < 2:
 
-    return jsonify({
-        "reply": f"OPEN VDO:\n{url}"
-    })
+            reply_message(
 
+                reply_token,
 
+                "รูปแบบ:\n"
+                "vdo imagenumber"
+            )
+
+            return jsonify({
+                "status": "error"
+            })
+
+        # ====================================
+        # PROJECT
+        # ====================================
+
+        project_name = parts[1].lower()
+
+        # ====================================
+        # VDO URL
+        # ====================================
+
+        vdo_url = (
+
+            f"{WORKER_WEBHOOK_URL}"
+            f"/vdo?project={project_name}"
+        )
+
+        print("VDO URL =", vdo_url)
+
+        # ====================================
+        # REPLY
+        # ====================================
+
+        msg = (
+            "เปิด VDO AI\n\n"
+            f"PROJECT: {project_name}\n\n"
+            f"{vdo_url}"
+        )
+
+        print(msg)
+
+        reply_message(
+            reply_token,
+            msg
+        )
+
+        return jsonify({
+            "status": "success"
+        })
+
+    except Exception as e:
+
+        traceback.print_exc()
+
+        return jsonify({
+
+            "status": "error",
+
+            "message": str(e)
+
+        }), 500
+#---------------------------------------
+# =========================================================
+# VDO PAGE
+# =========================================================
+@app.route("/vdo")
+def vdo_page():
+
+    project = request.args.get(
+        "project",
+        "imagenumber"
+    )
+
+    return render_template(
+
+        "vdo.html",
+
+        project=project
+    )
+        #===========================================
+  
+# =========================================================
+# IMAGE COLOR
+# imagecolor red
+# =========================================================
+def imagecolor(event, parts):
+
+    try:
+
+        reply_token = event.get(
+            "replyToken"
+        )
+
+        source = event.get(
+            "source",
+            {}
+        )
+
+        user_id = source.get(
+            "userId"
+        )
+
+        # ====================================
+        # VALIDATE
+        # ====================================
+
+        if len(parts) < 2:
+
+            reply_message(
+
+                reply_token,
+
+                "รูปแบบ:\n"
+                "imagecolor red"
+            )
+
+            return jsonify({
+                "status": "error"
+            })
+
+        # ====================================
+        # GET LABEL
+        # ====================================
+
+        project_name = "imagecolor"
+
+        label_name = parts[1].lower()
+
+        # ====================================
+        # SAVE SESSION
+        # ====================================
+
+        worker_db.collection(
+            "dataset_session"
+        ).document(user_id).set({
+
+            "mode":
+                "imagecolor",
+
+            "project":
+                project_name,
+
+            "label":
+                label_name,
+
+            "updated_at":
+                datetime.utcnow()
+        })
+
+        print("SESSION SAVED")
+
+        # ====================================
+        # REPLY
+        # ====================================
+
+        reply_message(
+
+            reply_token,
+
+            f"บันทึกเรียบร้อย\n"
+            f"PROJECT: {project_name}\n"
+            f"class: {label_name}\n\n"
+            f"ส่งรูปหมวด {label_name}"
+        )
+
+        return jsonify({
+            "status": "success"
+        })
+
+    except Exception as e:
+
+        traceback.print_exc()
+
+        return jsonify({
+
+            "status": "error",
+
+            "message": str(e)
+
+        }), 500
+# =========================================================
+# IMAGE NUMBER
+# imagenumber  
+# =========================================================
+def imagenumber(event, parts):
+
+    try:
+
+        reply_token = event.get(
+            "replyToken"
+        )
+
+        source = event.get(
+            "source",
+            {}
+        )
+
+        user_id = source.get(
+            "userId"
+        )
+
+        # ====================================
+        # VALIDATE
+        # ====================================
+
+        if len(parts) < 2:
+
+            reply_message(
+
+                reply_token,
+
+                "รูปแบบ:\n"
+                "imagenumber 5"
+            )
+
+            return jsonify({
+                "status": "error"
+            })
+
+        # ====================================
+        # GET LABEL
+        # ====================================
+
+        label_name = parts[1].strip()
+
+        # ====================================
+        # CHECK NUMBER
+        # ====================================
+
+        if not label_name.isdigit():
+
+            reply_message(
+
+                reply_token,
+
+                "label ต้องเป็นตัวเลข\n"
+                "เช่น:\n"
+                "imagenumber 5"
+            )
+
+            return jsonify({
+                "status": "error"
+            })
+
+        # ====================================
+        # PROJECT
+        # ====================================
+
+        project_name = "imagenumber"
+
+        # ====================================
+        # SAVE SESSION
+        # ====================================
+
+        worker_db.collection(
+            "dataset_session"
+        ).document(user_id).set({
+
+            "mode":
+                "imagenumber",
+
+            "project":
+                project_name,
+
+            "label":
+                label_name,
+
+            "updated_at":
+                datetime.utcnow()
+        })
+
+        print("NUMBER SESSION SAVED")
+
+        # ====================================
+        # REPLY
+        # ====================================
+
+        reply_message(
+
+            reply_token,
+
+            f"บันทึกเรียบร้อย\n"
+            f"PROJECT: {project_name}\n"
+            f"class: {label_name}\n\n"
+            f"ส่งรูปเลข {label_name}"
+        )
+
+        return jsonify({
+            "status": "success"
+        })
+
+    except Exception as e:
+
+        traceback.print_exc()
+
+        return jsonify({
+
+            "status": "error",
+
+            "message": str(e)
+
+        }), 500
+# =========================================================
+# DOWNLOAD DATASET
+# download imagecolor red
+# =========================================================
+def download_dataset(event, parts):
+
+    try:
+
+        reply_token = event.get(
+            "replyToken"
+        )
+
+        # ====================================
+        # VALIDATE
+        # ====================================
+
+        if len(parts) < 3:
+
+            reply_message(
+
+                reply_token,
+
+                "รูปแบบ:\n"
+                "download imagecolor red"
+            )
+
+            return jsonify({
+                "status": "error"
+            })
+
+        # ====================================
+        # GET PROJECT / LABEL
+        # ====================================
+
+        project_name = parts[1].lower()
+
+        label_name = parts[2].lower()
+
+        print("DOWNLOAD PROJECT =", project_name)
+        print("DOWNLOAD LABEL =", label_name)
+
+        # ====================================
+        # STORAGE PREFIX
+        # ====================================
+
+        storage_prefix = (
+            f"{project_name}/"
+            f"{label_name}/"
+        )
+
+        print(
+            "PREFIX =",
+            storage_prefix
+        )
+
+        # ====================================
+        # GET FILES FROM STORAGE
+        # ====================================
+
+        blobs = list(
+
+            bucket.list_blobs(
+                prefix=storage_prefix
+            )
+        )
+
+        if len(blobs) == 0:
+
+            reply_message(
+
+                reply_token,
+
+                "ไม่พบ dataset"
+            )
+
+            return jsonify({
+                "status": "error"
+            })
+
+        print(
+            "TOTAL FILES =",
+            len(blobs)
+        )
+
+        # ====================================
+        # ZIP FILE
+        # ====================================
+
+        zip_filename = (
+            f"{project_name}_{label_name}.zip"
+        )
+
+        zip_temp_path = (
+            f"/tmp/{zip_filename}"
+        )
+
+        with zipfile.ZipFile(
+
+            zip_temp_path,
+
+            "w",
+
+            zipfile.ZIP_DEFLATED
+
+        ) as zipf:
+
+            for blob in blobs:
+
+                filename = os.path.basename(
+                    blob.name
+                )
+
+                if not filename:
+                    continue
+
+                temp_file = (
+                    f"/tmp/{filename}"
+                )
+
+                # DOWNLOAD FROM STORAGE
+                blob.download_to_filename(
+                    temp_file
+                )
+
+                # ADD ZIP
+                zipf.write(
+
+                    temp_file,
+
+                    arcname=filename
+                )
+
+                # DELETE TEMP
+                if os.path.exists(
+                    temp_file
+                ):
+                    os.remove(
+                        temp_file
+                    )
+
+        print(
+            "ZIP CREATED =",
+            zip_temp_path
+        )
+
+        # ====================================
+        # UPLOAD ZIP
+        # ====================================
+
+        zip_storage_path = (
+            f"downloads/"
+            f"{zip_filename}"
+        )
+
+        zip_blob = bucket.blob(
+            zip_storage_path
+        )
+
+        zip_blob.upload_from_filename(
+
+            zip_temp_path,
+
+            content_type="application/zip"
+        )
+
+        zip_blob.make_public()
+
+        zip_url = zip_blob.public_url
+
+        print(
+            "ZIP URL =",
+            zip_url
+        )
+
+        # ====================================
+        # DELETE ZIP TEMP
+        # ====================================
+
+        if os.path.exists(
+            zip_temp_path
+        ):
+
+            os.remove(
+                zip_temp_path
+            )
+
+        # ====================================
+        # REPLY
+        # ====================================
+
+        reply_message(
+
+            reply_token,
+
+            f"DOWNLOAD READY\n\n"
+            f"PROJECT: {project_name}\n"
+            f"CLASS: {label_name}\n"
+            f"FILES: {len(blobs)}\n\n"
+            f"{zip_url}"
+        )
+
+        return jsonify({
+            "status": "success"
+        })
+
+    except Exception as e:
+
+        traceback.print_exc()
+
+        reply_message(
+
+            event.get(
+                "replyToken"
+            ),
+
+            f"DOWNLOAD ERROR\n{str(e)}"
+        )
+
+        return jsonify({
+
+            "status": "error",
+
+            "message": str(e)
+
+        }), 500        
+# =========================================================
+# HANDLE IMAGE
+# =========================================================
+# HANDLE IMAGE
+# =========================================================
+def handle_image(event):
+
+    try:
+
+        reply_token = event.get(
+            "replyToken"
+        )
+
+        source = event.get(
+            "source",
+            {}
+        )
+
+        user_id = source.get(
+            "userId"
+        )
+
+        message = event.get(
+            "message",
+            {}
+        )
+
+        # ====================================
+        # GET SESSION
+        # ====================================
+
+        session_doc = worker_db.collection(
+            "dataset_session"
+        ).document(user_id).get()
+
+        if not session_doc.exists:
+
+            reply_message(
+
+                reply_token,
+
+                "กรุณาพิมพ์:\n"
+                "imagecolor red"
+            )
+
+            return jsonify({
+                "status": "error"
+            })
+
+        session_data = session_doc.to_dict()
+
+        project_name = session_data.get(
+            "project"
+        )
+
+        label_name = session_data.get(
+            "label"
+        )
+
+        print("PROJECT =", project_name)
+        print("LABEL =", label_name)
+
+        # ====================================
+        # GET IMAGE FROM LINE
+        # ====================================
+
+        message_id = message.get("id")
+
+        print("MESSAGE ID =", message_id)
+
+        image_url = (
+            "https://api-data.line.me/v2/bot/message/"
+            f"{message_id}/content"
+        )
+
+        print("DOWNLOAD IMAGE FROM LINE")
+
+        r = requests.get(
+
+            image_url,
+
+            headers={
+
+                "Authorization":
+                    f"Bearer {LINE_CHANNEL_ACCESS_TOKEN}"
+            },
+
+            timeout=30
+        )
+
+        print("LINE STATUS =", r.status_code)
+
+        if r.status_code != 200:
+
+            print("LINE ERROR =", r.text)
+
+            reply_message(
+
+                reply_token,
+
+                f"โหลดรูปไม่สำเร็จ\n"
+                f"STATUS: {r.status_code}"
+            )
+
+            return jsonify({
+                "status": "error"
+            })
+
+        # ====================================
+        # OPEN IMAGE
+        # ====================================
+
+        image = Image.open(
+            BytesIO(r.content)
+        )
+
+        # ====================================
+        # RGB
+        # ====================================
+
+        image = image.convert(
+            "RGB"
+        )
+
+        # ====================================
+        # RESIZE
+        # ====================================
+
+        image = image.resize(
+            (224, 224)
+        )
+
+        # ====================================
+        # FILE NAME
+        # ====================================
+
+        filename = (
+            str(uuid.uuid4())
+            + ".jpg"
+        )
+
+        # ====================================
+        # TEMP PATH
+        # ====================================
+
+        temp_path = (
+            f"/tmp/{filename}"
+        )
+
+        image.save(
+
+            temp_path,
+
+            format="JPEG"
+        )
+
+        print(
+            "IMAGE SAVED =",
+            temp_path
+        )
+
+        # ====================================
+        # STORAGE PATH
+        # ====================================
+
+        storage_path = (
+
+            f"{project_name}/"
+            f"{label_name}/"
+            f"{filename}"
+        )
+
+        print(
+            "STORAGE PATH =",
+            storage_path
+        )
+
+        # ====================================
+        # UPLOAD STORAGE
+        # ====================================
+
+        blob = bucket.blob(
+            storage_path
+        )
+
+        blob.upload_from_filename(
+
+            temp_path,
+
+            content_type="image/jpeg"
+        )
+
+        blob.make_public()
+
+        public_url = blob.public_url
+
+        print("UPLOAD SUCCESS")
+        print(public_url)
+
+        # ====================================
+        # SAVE FIRESTORE
+        # ====================================
+
+        worker_db.collection(
+            project_name
+        ).document(
+            label_name
+        ).collection(
+            "dataset"
+        ).add({
+
+            "user_id":
+                user_id,
+
+            "project":
+                project_name,
+
+            "label":
+                label_name,
+
+            "storage_path":
+                storage_path,
+
+            "image_url":
+                public_url,
+
+            "width":
+                224,
+
+            "height":
+                224,
+
+            "created_at":
+                datetime.utcnow()
+        })
+
+        print("DATASET SAVED")
+
+         # ====================================
+       # COUNT IMAGES IN CLASS
+       # ====================================
+
+        dataset_docs = worker_db.collection(project_name ).document(label_name ).collection("dataset" ).get()
+
+        total_images = len( dataset_docs )
+
+        print("TOTAL IMAGES =",total_images)
+
+        # ====================================
+        # DELETE TEMP
+        # ====================================
+
+        if os.path.exists(
+            temp_path
+        ):
+
+            os.remove(
+                temp_path  
+            )
+
+        # ====================================
+        # REPLY
+        # ====================================
+
+        reply_message(
+
+                       reply_token, f"บันทึกรูปสำเร็จ class: {label_name}\n"
+                                    f"จำนวนรูป: {total_images}\n"
+                                    f"ส่งรูปต่อไปใน class: {label_name}"
+                          )
+
+        return jsonify({
+            "status": "success"
+        })
+
+    except Exception as e:
+
+        traceback.print_exc()
+
+        reply_message(
+
+            event.get(
+                "replyToken"
+            ),
+
+            f"ERROR\n{str(e)}"
+        )
+
+        return jsonify({
+
+            "status": "error",
+
+            "message": str(e)
+
+        }), 500
+# =========================================================
+@app.route("/worker-webhook", methods=["POST"])
+def worker_webhook():
+
+    try:
+
+        body = request.get_json(
+            silent=True
+        ) or {}
+
+        print("=" * 50)
+        print("WORKER WEBHOOK")
+        print(json.dumps(
+            body,
+            indent=2,
+            ensure_ascii=False
+        ))
+        print("=" * 50)
+
+        events = body.get("events", [])
+
+        for event in events:
+
+            event_type = event.get("type")
+
+            reply_token = event.get(
+                "replyToken"
+            )
+
+            source = event.get(
+                "source",
+                {}
+            )
+
+            user_id = source.get(
+                "userId"
+            )
+
+            if not user_id:
+                continue
+
+            # ====================================
+            # GET USER
+            # ====================================
+
+            user_doc = worker_db.collection("user") \
+                .document(user_id) \
+                .get()
+
+            if not user_doc.exists:
+                continue
+
+            user_data = user_doc.to_dict()
+
+            fullname = user_data.get(
+                "fullname",
+                "Unknown"
+            )
+
+            # ====================================
+            # MESSAGE EVENT
+            # ====================================
+
+            if event_type == "message":
+
+                text = event.get(
+                    "message",
+                    {}
+                ).get(
+                    "text",
+                    ""
+                )
+
+                print("TEXT =", text)
+
+                # SAVE CHAT LOG
+                worker_db.collection("chat_logs") \
+                    .add({
+
+                        "user_id":
+                            user_id,
+
+                        "fullname":
+                            fullname,
+
+                        "text":
+                            text,
+
+                        "timestamp":
+                            datetime.utcnow()
+                    })
+
+                # COMMANDS
+                if text.lower() == "ping":
+
+                    reply_message(
+                        reply_token,
+                        "pong"
+                    )
+
+                elif text.lower() == "profile":
+
+                    reply_message(
+
+                        reply_token,
+
+                        f"ชื่อ: {fullname}\n"
+                        f"USER: {user_id}\n"
+                        f"WORKER: {SERVER_ID}"
+                    )
+
+                else:
+
+                    reply_message(
+
+                        reply_token,
+
+                        f"สวัสดี {fullname}\n\n"
+                        f"คุณพิมพ์: {text}"
+                    )
+
+            # ====================================
+            # FOLLOW EVENT
+            # ====================================
+
+            elif event_type == "follow":
+
+                push_message(
+                    user_id,
+                    "ยินดีต้อนรับ"
+                )
+
+        return jsonify({
+            "status": "success"
+        })
+
+    except Exception as e:
+
+        traceback.print_exc()
+
+        return jsonify({
+
+            "status": "error",
+
+            "message": str(e)
+
+        }), 500 
+ 
 # =========================================================
 # RUN
-# =========================================================
+# ======================================================
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
+
+    app.run(
+
+        host="0.0.0.0",
+
+        port=int(
+            os.environ.get(
+                "PORT",
+                8080
+            )
+        )
+    )
