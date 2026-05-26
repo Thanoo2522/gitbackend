@@ -5,13 +5,12 @@
 
 <title>Realtime AI VDO</title>
 
-<meta name="viewport"
-content="width=device-width, initial-scale=1, maximum-scale=1">
+<meta
+    name="viewport"
+    content="width=device-width, initial-scale=1, maximum-scale=1"
+/>
 
-<!-- LIFF -->
-<script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
-
-<!-- TensorFlow -->
+<!-- TensorFlow.js -->
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@latest"></script>
 
 <!-- Teachable Machine -->
@@ -19,33 +18,70 @@ content="width=device-width, initial-scale=1, maximum-scale=1">
 
 <style>
 
+*{
+    box-sizing:border-box;
+}
+
 body{
     margin:0;
     background:black;
     color:white;
-    font-family:Arial;
+    font-family:Arial, sans-serif;
     text-align:center;
 }
 
+/* =========================
+HEADER
+========================= */
+
 header{
-    padding:10px;
-    font-size:18px;
+    padding:14px;
+    font-size:20px;
     font-weight:bold;
+    background:#111;
+}
+
+/* =========================
+VIDEO
+========================= */
+
+#videoContainer{
+    position:relative;
+    width:100%;
+    height:calc(100vh - 260px);
+    background:black;
+    overflow:hidden;
 }
 
 video{
     width:100%;
-    height:auto;
+    height:100%;
+    object-fit:cover;
     background:black;
+}
+
+/* =========================
+CONTROLS
+========================= */
+
+.controls{
+    padding:10px;
 }
 
 button{
     width:90%;
+    max-width:500px;
+
     padding:14px;
     margin:8px;
-    font-size:16px;
+
+    font-size:18px;
+    font-weight:bold;
+
     border:none;
-    border-radius:10px;
+    border-radius:12px;
+
+    cursor:pointer;
 }
 
 #startBtn{
@@ -58,18 +94,38 @@ button{
     color:white;
 }
 
+/* =========================
+RESULT
+========================= */
+
 #result{
-    margin-top:15px;
-    font-size:22px;
-    font-weight:bold;
     padding:10px;
+    margin-bottom:20px;
 }
 
 .classBox{
-    margin:8px;
-    padding:10px;
+
+    margin:8px auto;
+    padding:12px;
+
+    width:90%;
+    max-width:500px;
+
     background:#222;
-    border-radius:10px;
+
+    border-radius:12px;
+
+    font-size:20px;
+    font-weight:bold;
+}
+
+.status{
+    color:#00e676;
+    font-size:18px;
+}
+
+.error{
+    color:#ff5252;
     font-size:18px;
 }
 
@@ -83,25 +139,34 @@ canvas{
 <body>
 
 <header>
-📷 LIFF Realtime AI Camera
+📷 Realtime AI Camera
 </header>
 
-<video
-    id="video"
-    autoplay
-    playsinline
-></video>
+<div id="videoContainer">
 
-<button id="startBtn">
-    Start Realtime AI
-</button>
+    <video
+        id="video"
+        autoplay
+        playsinline
+        muted
+    ></video>
 
-<button id="stopBtn">
-    Stop
-</button>
+</div>
+
+<div class="controls">
+
+    <button id="startBtn">
+        Start Realtime AI
+    </button>
+
+    <button id="stopBtn">
+        Stop
+    </button>
+
+</div>
 
 <div id="result">
-    Loading...
+    Waiting...
 </div>
 
 <canvas id="canvas"></canvas>
@@ -120,64 +185,21 @@ let running = false;
 
 let predictLoop = null;
 
-const video = document.getElementById("video");
+const video =
+    document.getElementById("video");
 
-const resultDiv = document.getElementById("result");
+const resultDiv =
+    document.getElementById("result");
 
 // =====================================================
-// FIREBASE STORAGE MODEL
-//
-// baselineoa.firebasestorage.app
-//
-// Folder:
-// models_imagenumber/
-//      model.json
-//      metadata.json
-//      weights.bin
+// FIREBASE MODEL URL
 // =====================================================
-
-// IMPORTANT:
-// ต้องเปิด public read ใน Firebase Storage ก่อน
 
 const MODEL_URL =
 "https://firebasestorage.googleapis.com/v0/b/baselineoa.firebasestorage.app/o/models_imagenumber%2Fmodel.json?alt=media";
 
 const METADATA_URL =
 "https://firebasestorage.googleapis.com/v0/b/baselineoa.firebasestorage.app/o/models_imagenumber%2Fmetadata.json?alt=media";
-
-// =====================================================
-// INIT LIFF
-// =====================================================
-
-async function initLiff(){
-
-    try{
-
-        // กัน init ซ้ำ
-        if(window.liffLoaded){
-            return;
-        }
-
-        window.liffLoaded = true;
-
-        await liff.init({
-
-            liffId: "{{ liff_id }}"
-        });
-
-        if(!liff.isLoggedIn()){
-
-            liff.login();
-        }
-
-    }catch(err){
-
-        console.log(
-            "LIFF ERROR:",
-            err
-        );
-    }
-}
 
 // =====================================================
 // LOAD MODEL
@@ -188,15 +210,21 @@ async function loadModel(){
     try{
 
         resultDiv.innerHTML =
-            "Loading AI Model...";
+            `<div class="status">
+                Loading AI Model...
+            </div>`;
 
         console.log(
-            "MODEL URL =",
+            "Loading model..."
+        );
+
+        console.log(
+            "MODEL URL:",
             MODEL_URL
         );
 
         console.log(
-            "METADATA URL =",
+            "METADATA URL:",
             METADATA_URL
         );
 
@@ -206,12 +234,14 @@ async function loadModel(){
             METADATA_URL
         );
 
-        resultDiv.innerHTML =
-            "Model Loaded ✅";
-
         console.log(
             "MODEL READY"
         );
+
+        resultDiv.innerHTML =
+            `<div class="status">
+                AI Model Loaded ✅
+            </div>`;
 
     }catch(err){
 
@@ -221,7 +251,9 @@ async function loadModel(){
         );
 
         resultDiv.innerHTML =
-            "โหลด model ไม่สำเร็จ";
+            `<div class="error">
+                โหลด AI Model ไม่สำเร็จ
+            </div>`;
     }
 }
 
@@ -243,7 +275,17 @@ async function startCamera(){
             .getUserMedia({
 
                 video:{
-                    facingMode:"environment"
+                    facingMode:{
+                        ideal:"environment"
+                    },
+
+                    width:{
+                        ideal:1280
+                    },
+
+                    height:{
+                        ideal:720
+                    }
                 },
 
                 audio:false
@@ -259,10 +301,13 @@ async function startCamera(){
 
     }catch(err){
 
-        console.log(err);
+        console.log(
+            "CAMERA ERROR:",
+            err
+        );
 
         alert(
-            "เปิดกล้องไม่ได้"
+            "ไม่สามารถเปิดกล้องได้"
         );
     }
 }
@@ -283,21 +328,27 @@ async function predictFrame(){
             return;
         }
 
-        // realtime predict
+        if(video.readyState < 2){
+            return;
+        }
+
         const predictions =
             await model.predict(video);
 
-        // sort มาก -> น้อย
+        // sort probability มาก -> น้อย
         predictions.sort(
 
             (a,b)=>
                 b.probability - a.probability
         );
 
-        // build html
         let html = "";
 
         predictions.forEach(p => {
+
+            const percent =
+                (p.probability * 100)
+                .toFixed(1);
 
             html += `
 
@@ -307,7 +358,7 @@ async function predictFrame(){
 
                     :
 
-                    ${(p.probability*100).toFixed(1)}%
+                    ${percent}%
 
                 </div>
 
@@ -333,12 +384,16 @@ async function startRealtimeAI(){
 
     try{
 
-        // กันเปิดซ้ำ
         if(running){
             return;
         }
 
         running = true;
+
+        resultDiv.innerHTML =
+            `<div class="status">
+                Starting...
+            </div>`;
 
         // load model
         if(!model){
@@ -349,7 +404,7 @@ async function startRealtimeAI(){
         // start camera
         await startCamera();
 
-        // realtime 2 FPS
+        // predict every 500ms = 2 FPS
         predictLoop = setInterval(
 
             async()=>{
@@ -361,9 +416,18 @@ async function startRealtimeAI(){
             500
         );
 
+        console.log(
+            "Realtime AI STARTED"
+        );
+
     }catch(err){
 
-        console.log(err);
+        console.log(
+            "START ERROR:",
+            err
+        );
+
+        running = false;
     }
 }
 
@@ -388,43 +452,63 @@ function stopRealtimeAI(){
     // stop camera
     if(stream){
 
-        stream.getTracks()
+        stream
+        .getTracks()
         .forEach(track=>{
 
             track.stop();
         });
 
-        video.srcObject = null;
-
         stream = null;
     }
 
+    video.srcObject = null;
+
     resultDiv.innerHTML =
-        "Stopped";
+        `<div class="error">
+            Realtime AI Stopped
+        </div>`;
+
+    console.log(
+        "Realtime AI STOPPED"
+    );
 }
 
 // =====================================================
-// EVENTS
+// BUTTON EVENTS
 // =====================================================
 
 document
 .getElementById("startBtn")
-.onclick = startRealtimeAI;
+.addEventListener(
+
+    "click",
+
+    startRealtimeAI
+);
 
 document
 .getElementById("stopBtn")
-.onclick = stopRealtimeAI;
+.addEventListener(
+
+    "click",
+
+    stopRealtimeAI
+);
 
 // =====================================================
 // AUTO START
 // =====================================================
 
-window.onload = async()=>{
+window.addEventListener(
 
-    await initLiff();
+    "load",
 
-    await startRealtimeAI();
-};
+    async()=>{
+
+        await startRealtimeAI();
+    }
+);
 
 </script>
 

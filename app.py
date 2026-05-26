@@ -790,6 +790,9 @@ def main_route():
 # OPEN VDO AI
 # vdo imagenumber
 # =========================================================
+# OPEN VDO AI
+# vdo imagenumber
+# =========================================================
 def open_vdo(event, parts):
 
     try:
@@ -823,7 +826,7 @@ def open_vdo(event, parts):
         project_name = parts[1].lower()
 
         # ====================================
-        # VDO URL
+        # REAL BROWSER URL
         # ====================================
 
         vdo_url = (
@@ -835,21 +838,96 @@ def open_vdo(event, parts):
         print("VDO URL =", vdo_url)
 
         # ====================================
-        # REPLY
+        # FLEX MESSAGE
+        # เปิดด้วย external browser
         # ====================================
 
-        msg = (
-            "เปิด VDO AI\n\n"
-            f"PROJECT: {project_name}\n\n"
-            f"{vdo_url}"
+        payload = {
+
+            "replyToken": reply_token,
+
+            "messages": [
+
+                {
+                    "type": "flex",
+
+                    "altText": "Open Realtime AI",
+
+                    "contents": {
+
+                        "type": "bubble",
+
+                        "body": {
+
+                            "type": "box",
+
+                            "layout": "vertical",
+
+                            "contents": [
+
+                                {
+                                    "type": "text",
+
+                                    "text": "Realtime AI Camera",
+
+                                    "weight": "bold",
+
+                                    "size": "xl"
+                                },
+
+                                {
+                                    "type": "text",
+
+                                    "text":
+                                        f"PROJECT: {project_name}",
+
+                                    "margin": "md"
+                                }
+                            ]
+                        },
+
+                        "footer": {
+
+                            "type": "box",
+
+                            "layout": "vertical",
+
+                            "spacing": "sm",
+
+                            "contents": [
+
+                                {
+                                    "type": "button",
+
+                                    "style": "primary",
+
+                                    "action": {
+
+                                        "type": "uri",
+
+                                        "label": "Open In Browser",
+
+                                        "uri": vdo_url
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                }
+            ]
+        }
+
+        r = requests.post(
+
+            LINE_REPLY_API,
+
+            headers=LINE_HEADERS,
+
+            json=payload
         )
 
-        print(msg)
-
-        reply_message(
-            reply_token,
-            msg
-        )
+        print("LINE STATUS =", r.status_code)
+        print(r.text)
 
         return jsonify({
             "status": "success"
