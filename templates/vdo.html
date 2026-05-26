@@ -2,12 +2,23 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>LIFF Camera Stream</title>
-<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
 
+<title>Realtime AI VDO</title>
+
+<meta name="viewport"
+content="width=device-width, initial-scale=1, maximum-scale=1">
+
+<!-- LIFF -->
 <script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
 
+<!-- TensorFlow -->
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@latest"></script>
+
+<!-- Teachable Machine -->
+<script src="https://cdn.jsdelivr.net/npm/@teachablemachine/image@latest"></script>
+
 <style>
+
 body{
     margin:0;
     background:black;
@@ -19,6 +30,7 @@ body{
 header{
     padding:10px;
     font-size:18px;
+    font-weight:bold;
 }
 
 video{
@@ -29,109 +41,376 @@ video{
 
 button{
     width:90%;
-    padding:12px;
+    padding:14px;
     margin:8px;
     font-size:16px;
     border:none;
     border-radius:10px;
 }
 
-#startBtn{background:#00c853;color:white;}
-#snapBtn{background:#2979ff;color:white;}
-#stopBtn{background:#ff1744;color:white;}
+#startBtn{
+    background:#00c853;
+    color:white;
+}
+
+#stopBtn{
+    background:#ff1744;
+    color:white;
+}
+
+#result{
+    margin-top:15px;
+    font-size:22px;
+    font-weight:bold;
+    padding:10px;
+}
+
+.classBox{
+    margin:8px;
+    padding:10px;
+    background:#222;
+    border-radius:10px;
+    font-size:18px;
+}
 
 canvas{
     display:none;
 }
 
-img{
-    width:90%;
-    margin-top:10px;
-    border-radius:10px;
-}
 </style>
 </head>
 
 <body>
 
 <header>
-📷 LIFF Real-time Camera Stream
+📷 LIFF Realtime AI Camera
 </header>
 
-<video id="video" autoplay playsinline></video>
+<video
+    id="video"
+    autoplay
+    playsinline
+></video>
 
-<button id="startBtn">Start Camera</button>
-<button id="snapBtn">Capture Frame</button>
-<button id="stopBtn">Stop Camera</button>
+<button id="startBtn">
+    Start Realtime AI
+</button>
+
+<button id="stopBtn">
+    Stop
+</button>
+
+<div id="result">
+    Loading...
+</div>
 
 <canvas id="canvas"></canvas>
-<img id="snapshot"/>
 
 <script>
 
+// =====================================================
+// GLOBAL
+// =====================================================
+
 let stream = null;
+
+let model = null;
+
+let running = false;
+
+let predictLoop = null;
+
 const video = document.getElementById("video");
+
 const canvas = document.getElementById("canvas");
-const snapshot = document.getElementById("snapshot");
+
+const resultDiv = document.getElementById("result");
+
+// =====================================================
+// MODEL PATH
+// VSCode Folder:
+//
+// static/
+// └── models_imagenumber/
+//     ├── model.json
+//     ├── metadata.json
+//     └── weights.bin
+// =====================================================
+
+const MODEL_URL =
+    "models_imagenumber/model.json";
+
+const METADATA_URL =
+    "models_imagenumber/metadata.json";
+
+// =====================================================
+// INIT LIFF
+// =====================================================
 
 async function initLiff(){
-    try{
-        await liff.init({ liffId: "YOUR_LIFF_ID" });
 
-        // optional: auto login
+    try{
+
+        // กัน init ซ้ำ
+        if(window.liffLoaded){
+            return;
+        }
+
+        window.liffLoaded = true;
+
+        await liff.init({
+
+            liffId: "{{ liff_id }}"
+        });
+
         if(!liff.isLoggedIn()){
+
             liff.login();
         }
+
     }catch(err){
-        console.log("LIFF init error:", err);
+
+        console.log(
+            "LIFF ERROR:",
+            err
+        );
     }
 }
 
-// เปิดกล้องสด--
-async function startCamera(){
+// =====================================================
+// LOAD MODEL
+// =====================================================
+
+async function loadModel(){
+
     try{
-        stream = await navigator.mediaDevices.getUserMedia({
-            video: {
-                facingMode: "environment" // กล้องหลังมือถือ
-            },
-            audio: false
-        });
+
+        resultDiv.innerHTML =
+            "Loading AI Model...";
+
+        model = await tmImage.load(
+
+            MODEL_URL,
+            METADATA_URL
+        );
+
+        resultDiv.innerHTML =
+            "Model Loaded ✅";
+
+        console.log(
+            "MODEL READY"
+        );
+
+    }catch(err){
+
+        console.log(err);
+
+        resultDiv.innerHTML =
+            "โหลด model ไม่สำเร็จ";
+    }
+}
+
+// =====================================================
+// START CAMERA
+// =====================================================
+
+async function startCamera(){
+
+    try{
+
+        // กันเปิดซ้ำ
+        if(stream){
+            return;
+        }
+
+        stream =
+            await navigator.mediaDevices
+            .getUserMedia({
+
+                video:{
+                    facingMode:"environment"
+                },
+
+                audio:false
+            });
 
         video.srcObject = stream;
 
+        await video.play();
+
+        console.log(
+            "CAMERA READY"
+        );
+
     }catch(err){
-        alert("Cannot access camera: " + err);
+
+        console.log(err);
+
+        alert(
+            "เปิดกล้องไม่ได้"
+        );
+    }
+}
+
+// =====================================================
+// PREDICT
+// =====================================================
+
+async function predictFrame(){
+
+    try{
+
+        if(!running){
+            return;
+        }
+
+        if(!model){
+            return;
+        }
+
+        // predict realtime
+        const predictions =
+            await model.predict(video);
+
+        // sort มาก -> น้อย
+        predictions.sort(
+
+            (a,b)=>
+                b.probability - a.probability
+        );
+
+        // show all
+        let html = "";
+
+        predictions.forEach(p => {
+
+            html += `
+
+                <div class="classBox">
+
+                    ${p.className}
+
+                    :
+
+                    ${(p.probability*100).toFixed(1)}%
+
+                </div>
+
+            `;
+        });
+
+        resultDiv.innerHTML = html;
+
+    }catch(err){
+
+        console.log(
+            "PREDICT ERROR:",
+            err
+        );
+    }
+}
+
+// =====================================================
+// START REALTIME LOOP
+// 2 FPS
+// =====================================================
+
+async function startRealtimeAI(){
+
+    try{
+
+        // กันเปิดซ้ำ
+        if(running){
+            return;
+        }
+
+        running = true;
+
+        // load model
+        if(!model){
+
+            await loadModel();
+        }
+
+        // open camera
+        await startCamera();
+
+        // realtime loop
+        predictLoop = setInterval(
+
+            async()=>{
+
+                await predictFrame();
+
+            },
+
+            500 // 2 frame/sec
+        );
+
+    }catch(err){
+
         console.log(err);
     }
 }
 
-// ถ่ายภาพจาก stream
-function captureFrame(){
-    const ctx = canvas.getContext("2d");
+// =====================================================
+// STOP
+// =====================================================
 
-    canvas.width = video.videoWidth;
-    canvas.height = video.videoHeight;
+function stopRealtimeAI(){
 
-    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    running = false;
 
-    const dataURL = canvas.toDataURL("image/png");
-    snapshot.src = dataURL;
-}
+    // stop interval
+    if(predictLoop){
 
-// หยุดกล้อง
-function stopCamera(){
-    if(stream){
-        stream.getTracks().forEach(track => track.stop());
-        video.srcObject = null;
+        clearInterval(
+            predictLoop
+        );
+
+        predictLoop = null;
     }
+
+    // stop camera
+    if(stream){
+
+        stream.getTracks()
+        .forEach(track=>{
+
+            track.stop();
+        });
+
+        video.srcObject = null;
+
+        stream = null;
+    }
+
+    resultDiv.innerHTML =
+        "Stopped";
 }
 
-// Events
-document.getElementById("startBtn").onclick = startCamera;
-document.getElementById("snapBtn").onclick = captureFrame;
-document.getElementById("stopBtn").onclick = stopCamera;
+// =====================================================
+// EVENTS
+// =====================================================
 
-initLiff();
+document
+.getElementById("startBtn")
+.onclick = startRealtimeAI;
+
+document
+.getElementById("stopBtn")
+.onclick = stopRealtimeAI;
+
+// =====================================================
+// AUTO START
+// =====================================================
+
+window.onload = async()=>{
+
+    await initLiff();
+
+    await startRealtimeAI();
+};
 
 </script>
 
