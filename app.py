@@ -794,8 +794,9 @@ def imagenumber(event, parts):
 
         }), 500
 # =========================================================
-# DOWNLOAD DATASET
-# download imagecolor red
+ # DOWNLOAD DATASET
+# download imagenumber
+# download imagecolor
 # =========================================================
 def download_dataset(event, parts):
 
@@ -809,14 +810,15 @@ def download_dataset(event, parts):
         # VALIDATE
         # ====================================
 
-        if len(parts) < 3:
+        if len(parts) < 2:
 
             reply_message(
 
                 reply_token,
 
                 "รูปแบบ:\n"
-                "download imagecolor red"
+                "download imagenumber\n"
+                "download imagecolor"
             )
 
             return jsonify({
@@ -824,15 +826,15 @@ def download_dataset(event, parts):
             })
 
         # ====================================
-        # GET PROJECT / LABEL
+        # PROJECT NAME
         # ====================================
 
         project_name = parts[1].lower()
 
-        label_name = parts[2].lower()
-
-        print("DOWNLOAD PROJECT =", project_name)
-        print("DOWNLOAD LABEL =", label_name)
+        print(
+            "DOWNLOAD PROJECT =",
+            project_name
+        )
 
         # ====================================
         # STORAGE PREFIX
@@ -840,7 +842,6 @@ def download_dataset(event, parts):
 
         storage_prefix = (
             f"{project_name}/"
-            f"{label_name}/"
         )
 
         print(
@@ -849,7 +850,7 @@ def download_dataset(event, parts):
         )
 
         # ====================================
-        # GET FILES FROM STORAGE
+        # GET FILES
         # ====================================
 
         blobs = list(
@@ -859,13 +860,26 @@ def download_dataset(event, parts):
             )
         )
 
+        # REMOVE EMPTY FOLDER
+        blobs = [
+
+            blob for blob in blobs
+
+            if not blob.name.endswith("/")
+        ]
+
+        # ====================================
+        # NO FILES
+        # ====================================
+
         if len(blobs) == 0:
 
             reply_message(
 
                 reply_token,
 
-                "ไม่พบ dataset"
+                f"ไม่พบ dataset\n"
+                f"PROJECT: {project_name}"
             )
 
             return jsonify({
@@ -878,16 +892,47 @@ def download_dataset(event, parts):
         )
 
         # ====================================
-        # ZIP FILE
+        # LIMIT FILES
+        # ====================================
+
+        MAX_FILES = 3000
+
+        if len(blobs) > MAX_FILES:
+
+            reply_message(
+
+                reply_token,
+
+                f"ไฟล์เกิน {MAX_FILES}\n"
+                f"กรุณาลดจำนวนรูป"
+            )
+
+            return jsonify({
+                "status": "error"
+            })
+
+        # ====================================
+        # ZIP FILE NAME
         # ====================================
 
         zip_filename = (
-            f"{project_name}_{label_name}.zip"
+
+            f"{project_name}_"
+            f"{uuid.uuid4().hex}.zip"
         )
 
         zip_temp_path = (
             f"/tmp/{zip_filename}"
         )
+
+        print(
+            "ZIP FILE =",
+            zip_filename
+        )
+
+        # ====================================
+        # CREATE ZIP
+        # ====================================
 
         with zipfile.ZipFile(
 
@@ -901,37 +946,60 @@ def download_dataset(event, parts):
 
             for blob in blobs:
 
-                filename = os.path.basename(
-                    blob.name
-                )
+                try:
 
-                if not filename:
-                    continue
+                    # =========================
+                    # SKIP FOLDER
+                    # =========================
 
-                temp_file = (
-                    f"/tmp/{filename}"
-                )
+                    if blob.name.endswith("/"):
+                        continue
 
-                # DOWNLOAD FROM STORAGE
-                blob.download_to_filename(
-                    temp_file
-                )
-
-                # ADD ZIP
-                zipf.write(
-
-                    temp_file,
-
-                    arcname=filename
-                )
-
-                # DELETE TEMP
-                if os.path.exists(
-                    temp_file
-                ):
-                    os.remove(
-                        temp_file
+                    print(
+                        "ADD ZIP =",
+                        blob.name
                     )
+
+                    # =========================
+                    # DOWNLOAD BYTES
+                    # =========================
+
+                    file_bytes = (
+                        blob.download_as_bytes()
+                    )
+
+                    # =========================
+                    # KEEP FOLDER STRUCTURE
+                    # =========================
+
+                    arcname = blob.name.replace(
+                        f"{project_name}/",
+                        ""
+                    )
+
+                    # EXAMPLE:
+                    # imagenumber/1/a.jpg
+                    # -> 1/a.jpg
+
+                    # =========================
+                    # WRITE ZIP
+                    # =========================
+
+                    zipf.writestr(
+
+                        arcname,
+
+                        file_bytes
+                    )
+
+                except Exception as e:
+
+                    print(
+                        "ZIP ERROR =",
+                        blob.name
+                    )
+
+                    traceback.print_exc()
 
         print(
             "ZIP CREATED =",
@@ -939,13 +1007,18 @@ def download_dataset(event, parts):
         )
 
         # ====================================
-        # UPLOAD ZIP
+        # STORAGE ZIP PATH
         # ====================================
 
         zip_storage_path = (
+
             f"downloads/"
             f"{zip_filename}"
         )
+
+        # ====================================
+        # UPLOAD ZIP
+        # ====================================
 
         zip_blob = bucket.blob(
             zip_storage_path
@@ -958,6 +1031,10 @@ def download_dataset(event, parts):
             content_type="application/zip"
         )
 
+        # ====================================
+        # MAKE PUBLIC
+        # ====================================
+
         zip_blob.make_public()
 
         zip_url = zip_blob.public_url
@@ -968,7 +1045,7 @@ def download_dataset(event, parts):
         )
 
         # ====================================
-        # DELETE ZIP TEMP
+        # DELETE TEMP ZIP
         # ====================================
 
         if os.path.exists(
@@ -977,6 +1054,10 @@ def download_dataset(event, parts):
 
             os.remove(
                 zip_temp_path
+            )
+
+            print(
+                "TEMP ZIP DELETED"
             )
 
         # ====================================
@@ -989,7 +1070,6 @@ def download_dataset(event, parts):
 
             f"DOWNLOAD READY\n\n"
             f"PROJECT: {project_name}\n"
-            f"CLASS: {label_name}\n"
             f"FILES: {len(blobs)}\n\n"
             f"{zip_url}"
         )
@@ -1017,7 +1097,7 @@ def download_dataset(event, parts):
 
             "message": str(e)
 
-        }), 500        
+        }), 500  
 # =========================================================
 # HANDLE IMAGE
 # =========================================================
