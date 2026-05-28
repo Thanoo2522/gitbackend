@@ -996,7 +996,7 @@ def download_dataset(event, parts):
         reply_token = event.get("replyToken")
 
         # ====================================
-        # VALIDATE MIN
+        # VALIDATE
         # ====================================
         if len(parts) < 2:
 
@@ -1004,44 +1004,24 @@ def download_dataset(event, parts):
                 reply_token,
                 "รูปแบบ:\n"
                 "download imagenumber\n"
-                "หรือ\n"
-                "download imagecolor red"
+                "download imagecolor red\n"
+                "download imagemeter water v2"
             )
 
             return jsonify({"status": "error"})
 
         # ====================================
-        # PROJECT
+        # BUILD UNIVERSAL PATH
         # ====================================
-        project_name = parts[1].lower()
+        # remove "download"
+        path_parts = parts[1:]
 
-        # ====================================
-        # MODE SELECTION
-        # ====================================
+        storage_prefix = "/".join(path_parts) + "/"
 
-        # -----------------------------
-        # MODE A: download whole project
-        # -----------------------------
-        if len(parts) == 2:
+        project_name = path_parts[0]
+        label_name = "/".join(path_parts[1:]) if len(path_parts) > 1 else "ALL"
 
-            print("MODE = FULL PROJECT DOWNLOAD")
-
-            storage_prefix = f"{project_name}/"
-
-            label_name = "ALL"
-
-        # -----------------------------
-        # MODE B: download specific label
-        # -----------------------------
-        else:
-
-            label_name = parts[2].lower()
-
-            print("MODE = SINGLE LABEL DOWNLOAD")
-
-            storage_prefix = f"{project_name}/{label_name}/"
-
-        print("PREFIX =", storage_prefix)
+        print("UNIVERSAL PREFIX =", storage_prefix)
 
         # ====================================
         # GET FILES
@@ -1060,12 +1040,11 @@ def download_dataset(event, parts):
         print("TOTAL FILES =", len(blobs))
 
         # ====================================
-        # ZIP NAME
+        # ZIP NAME (SAFE)
         # ====================================
-        zip_filename = (
-            f"{project_name}_{label_name}.zip"
-        )
+        safe_label = label_name.replace("/", "_")
 
+        zip_filename = f"{project_name}_{safe_label}.zip"
         zip_temp_path = f"/tmp/{zip_filename}"
 
         # ====================================
@@ -1084,6 +1063,7 @@ def download_dataset(event, parts):
 
                 blob.download_to_filename(temp_file)
 
+                # keep full structure inside zip
                 zipf.write(temp_file, arcname=blob.name)
 
                 if os.path.exists(temp_file):
@@ -1112,8 +1092,7 @@ def download_dataset(event, parts):
         reply_message(
             reply_token,
             f"DOWNLOAD READY\n\n"
-            f"PROJECT: {project_name}\n"
-            f"MODE: {label_name}\n"
+            f"PATH: {storage_prefix}\n"
             f"FILES: {len(blobs)}\n\n"
             f"{zip_url}"
         )
@@ -1132,7 +1111,7 @@ def download_dataset(event, parts):
         return jsonify({
             "status": "error",
             "message": str(e)
-        }), 500      
+        }), 500  
 # =========================================================
 # HANDLE IMAGE
 # =========================================================
