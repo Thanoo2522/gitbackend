@@ -322,146 +322,7 @@ def create_storage_folder(folder_path):
 # imageinsect fly
 # imagemeter water
 # =========================================================
-def image_dataset_command(event, parts):
 
-    try:
-
-        reply_token = event.get(
-            "replyToken"
-        )
-
-        source = event.get(
-            "source",
-            {}
-        )
-
-        user_id = source.get(
-            "userId"
-        )
-
-        # VALIDATE
-        if len(parts) < 2:
-
-            reply_message(
-
-                reply_token,
-
-                "รูปแบบ:\n"
-                "imagecolor red\n"
-                "imageinsect fly\n"
-                "imagemeter water"
-            )
-
-            return jsonify({
-                "status": "error"
-            })
-
-        # PROJECT
-        project_name = parts[0].lower()
-
-        # LABEL
-        label_name = parts[1].lower()
-
-        # CLEAN
-        project_name = project_name.replace(
-            " ",
-            ""
-        )
-
-        label_name = label_name.replace(
-            " ",
-            ""
-        )
-
-        # CREATE STORAGE FOLDER
-        create_storage_folder(
-            f"{project_name}/{label_name}"
-        )
-
-        # SAVE SESSION
-        worker_db.collection(
-            "dataset_session"
-        ).document(user_id).set({
-
-            "mode":
-                "dataset",
-
-            "project":
-                project_name,
-
-            "label":
-                label_name,
-
-            "updated_at":
-                datetime.utcnow()
-        })
-
-        # SAVE PROJECT INFO
-        worker_db.collection(
-            "dataset_projects"
-        ).document(project_name).set({
-
-            "project":
-                project_name,
-
-            "updated_at":
-                datetime.utcnow()
-
-        }, merge=True)
-
-        # SAVE LABEL INFO
-        worker_db.collection(
-            "dataset_projects"
-        ).document(project_name).collection(
-            "labels"
-        ).document(label_name).set({
-
-            "label":
-                label_name,
-
-            "updated_at":
-                datetime.utcnow()
-
-        }, merge=True)
-
-        # REPLY
-        reply_message(
-
-            reply_token,
-
-            f"พร้อมรับ dataset\n\n"
-            f"PROJECT: {project_name}\n"
-            f"CLASS: {label_name}\n\n"
-            f"Folder ถูกสร้างแล้ว\n"
-            f"ส่งรูปได้เลย"
-        )
-
-        return jsonify({
-            "status": "success"
-        })
-
-    except Exception as e:
-
-        traceback.print_exc()
-
-        reply_message(
-
-            event.get(
-                "replyToken"
-            ),
-
-            f"COMMAND ERROR\n{str(e)}"
-        )
-
-        return jsonify({
-
-            "status":
-                "error",
-
-            "message":
-                str(e)
-
-        }), 500
 
 # =========================================================
 # DOWNLOAD DATASET
@@ -976,93 +837,181 @@ def handle_image(event):
 # =========================================================
 # MAIN ROUTE
 # =========================================================
-@app.route("/main-route", methods=["POST"])
-def main_route():
+ 
+# =========================================================
+# AUTO DATASET COMMAND
+# imagecolor red
+# imageinsect fly
+# imagemeter water
+# =========================================================
+def image_dataset_command(event, parts):
 
     try:
 
-        body = request.get_json(
-            silent=True
-        ) or {}
-
         print("=" * 50)
-        print("MAIN ROUTE")
-        print(json.dumps(
-            body,
-            indent=2,
-            ensure_ascii=False
-        ))
+        print("IMAGE DATASET COMMAND")
+        print("PARTS =", parts)
         print("=" * 50)
 
-        events = body.get(
-            "events",
-            []
+        reply_token = event.get(
+            "replyToken"
         )
 
-        for event in events:
+        source = event.get(
+            "source",
+            {}
+        )
 
-            if event.get("type") != "message":
-                continue
+        user_id = source.get(
+            "userId"
+        )
 
-            message = event.get(
-                "message",
-                {}
+        # ====================================
+        # VALIDATE
+        # ====================================
+        if len(parts) < 2:
+
+            print("INVALID PARTS =", parts)
+
+            reply_message(
+
+                reply_token,
+
+                "รูปแบบ:\n\n"
+                "imagecolor red\n"
+                "imageinsect fly\n"
+                "imagemeter water"
             )
 
-            message_type = message.get(
-                "type"
+            return jsonify({
+                "status": "error"
+            })
+
+        # ====================================
+        # PROJECT
+        # ====================================
+        project_name = parts[0].lower().strip()
+
+        # ====================================
+        # LABEL
+        # ====================================
+        label_name = parts[1].lower().strip()
+
+        # ====================================
+        # CLEAN NAME
+        # ====================================
+        project_name = project_name.replace(
+            " ",
+            ""
+        )
+
+        label_name = label_name.replace(
+            " ",
+            ""
+        )
+
+        print("PROJECT =", project_name)
+        print("LABEL =", label_name)
+
+        # ====================================
+        # CREATE STORAGE FOLDER
+        # ====================================
+        create_storage_folder(
+            f"{project_name}/{label_name}"
+        )
+
+        # ====================================
+        # SAVE SESSION
+        # ====================================
+        worker_db.collection(
+            "dataset_session"
+        ).document(user_id).set({
+
+            "mode":
+                "dataset",
+
+            "project":
+                project_name,
+
+            "label":
+                label_name,
+
+            "updated_at":
+                datetime.utcnow()
+        })
+
+        print("SESSION SAVED")
+
+        # ====================================
+        # SAVE PROJECT INFO
+        # ====================================
+        worker_db.collection(
+            "dataset_projects"
+        ).document(project_name).set({
+
+            "project":
+                project_name,
+
+            "updated_at":
+                datetime.utcnow()
+
+        }, merge=True)
+
+        print("PROJECT INFO SAVED")
+
+        # ====================================
+        # SAVE LABEL INFO
+        # ====================================
+        worker_db.collection(
+            "dataset_projects"
+        ).document(project_name).collection(
+            "labels"
+        ).document(label_name).set({
+
+            "label":
+                label_name,
+
+            "updated_at":
+                datetime.utcnow()
+
+        }, merge=True)
+
+        print("LABEL INFO SAVED")
+
+        # ====================================
+        # COUNT EXIST IMAGES
+        # ====================================
+        blobs = list(
+
+            bucket.list_blobs(
+
+                prefix=f"{project_name}/{label_name}/"
             )
+        )
 
-            # ====================================
-            # TEXT
-            # ====================================
-            if message_type == "text":
+        image_count = len([
 
-                text = message.get(
-                    "text",
-                    ""
-                ).strip()
+            b for b in blobs
 
-                parts = text.split(" ")
+            if ".keep" not in b.name
+        ])
 
-                command = parts[0].lower()
+        print("IMAGE COUNT =", image_count)
 
-                # DOWNLOAD
-                if command == "download":
+        # ====================================
+        # REPLY
+        # ====================================
+        reply_message(
 
-                    return download_dataset(
-                        event,
-                        parts
-                    )
+            reply_token,
 
-                # AUTO IMAGE COMMAND
-                elif command.startswith("image"):
-
-                    return image_dataset_command(
-                        event,
-                        parts
-                    )
-
-                # UNKNOWN
-                else:
-
-                    reply_message(
-
-                        event.get(
-                            "replyToken"
-                        ),
-
-                        "ไม่รู้จัก command"
-                    )
-
-            # ====================================
-            # IMAGE
-            # ====================================
-            elif message_type == "image":
-
-                return handle_image(
-                    event
-                )
+            f"พร้อมรับ dataset\n\n"
+            f"PROJECT: {project_name}\n"
+            f"CLASS: {label_name}\n"
+            f"TOTAL: {image_count}\n\n"
+            f"Folder ถูกสร้างแล้ว\n"
+            f"ส่งรูปได้เลย"
+        )
 
         return jsonify({
             "status": "success"
@@ -1071,6 +1020,15 @@ def main_route():
     except Exception as e:
 
         traceback.print_exc()
+
+        reply_message(
+
+            event.get(
+                "replyToken"
+            ),
+
+            f"COMMAND ERROR\n{str(e)}"
+        )
 
         return jsonify({
 
@@ -1081,7 +1039,7 @@ def main_route():
                 str(e)
 
         }), 500
-
+ 
 # =========================================================
 # RUN
 # =========================================================
