@@ -1,4 +1,4 @@
-# from click import command
+#from click import command
 from flask import Flask, request, jsonify
 from flask import render_template
 
@@ -13,33 +13,34 @@ from datetime import datetime
 
 import firebase_admin
 from firebase_admin import credentials, firestore, storage
-
 from PIL import Image
 from io import BytesIO
-
 import uuid
 import base64
 import zipfile
-
-import cv2
+#------------- เกี่ยวกับ AI Model
 import numpy as np
-
-# ================================================
+import tensorflow as tf
+# =========================================================
 # FLASK
 # =========================================================
 app = Flask(__name__)
 
 # =========================================================
+# =========================================================
 # MODELS
 # =========================================================
+
 models = {}
 
 # =========================================================
 # LABELS
 # =========================================================
+
 labels = {
 
     "imagenumber": [
+
         "1",
         "2"
     ]
@@ -47,6 +48,222 @@ labels = {
 
 print("LABELS LOADED")
 
+# =========================================================
+# LOAD MODEL (LAZY LOAD)
+# =========================================================
+
+def get_model(project):
+
+    # ====================================
+    # MODEL ALREADY LOADED
+    # ====================================
+
+    if project in models:
+
+        print(f"{project} model already loaded")
+
+        return models[project]
+
+    # ====================================
+    # LOAD NEW MODEL
+    # ====================================
+
+    print("=" * 50)
+    print(f"LOADING MODEL : {project}")
+    print("=" * 50)
+
+    model_path = f"models/{project}.h5"
+
+    print("MODEL PATH =", model_path)
+
+    # ====================================
+    # CHECK FILE
+    # ====================================
+
+    if not os.path.exists(model_path):
+
+        raise Exception(
+            f"Model file not found : {model_path}"
+        )
+
+    # ====================================
+    # LOAD MODEL
+    # ====================================
+
+    model = tf.keras.models.load_model(
+        model_path
+    )
+
+    models[project] = model
+
+    print(f"{project} model loaded success")
+
+    return model
+
+# =========================================================
+# PREDICT
+# =========================================================
+
+@app.route("/predict", methods=["POST"])
+def predict():
+
+    try:
+
+        # ====================================
+        # CHECK IMAGE
+        # ====================================
+
+        if "image" not in request.files:
+
+            return jsonify({
+
+                "status":
+                    "error",
+
+                "message":
+                    "No image uploaded"
+
+            }), 400
+
+        # ====================================
+        # GET DATA
+        # ====================================
+
+        file = request.files["image"]
+
+        project = request.form.get(
+            "project"
+        )
+
+        print("=" * 50)
+        print("PREDICT REQUEST")
+        print("=" * 50)
+
+        print(
+            "PROJECT =",
+            project
+        )
+
+        # ====================================
+        # CHECK PROJECT
+        # ====================================
+
+        if not project:
+
+            return jsonify({
+
+                "status":
+                    "error",
+
+                "message":
+                    "Project is required"
+
+            }), 400
+
+        # ====================================
+        # CHECK LABELS
+        # ====================================
+
+        if project not in labels:
+
+            return jsonify({
+
+                "status":
+                    "error",
+
+                "message":
+                    f"Unknown project : {project}"
+
+            }), 400
+
+        # ====================================
+        # LOAD MODEL
+        # ====================================
+
+        model = get_model(project)
+
+        class_names = labels[project]
+
+        # ====================================
+        # IMAGE PROCESS
+        # ====================================
+
+        image = Image.open(
+            file.stream
+        )
+
+        image = image.convert("RGB")
+
+        image = image.resize(
+            (224, 224)
+        )
+
+        img_array = np.array(image)
+
+        img_array = img_array / 255.0
+
+        img_array = np.expand_dims(
+
+            img_array,
+
+            axis=0
+        )
+
+        print("IMAGE READY")
+
+        # ====================================
+        # PREDICT
+        # ====================================
+
+        prediction = model.predict(
+            img_array
+        )
+
+        index = np.argmax(
+            prediction
+        )
+
+        confidence = float(
+            prediction[0][index]
+        )
+
+        label = class_names[index]
+
+        print(
+            "RESULT =",
+            label,
+            confidence
+        )
+
+        # ====================================
+        # RESPONSE
+        # ====================================
+
+        return jsonify({
+
+            "status":
+                "success",
+
+            "label":
+                label,
+
+            "confidence":
+                confidence
+        })
+
+    except Exception as e:
+
+        traceback.print_exc()
+
+        return jsonify({
+
+            "status":
+                "error",
+
+            "message":
+                str(e)
+
+        }), 500
 # =========================================================
 # HEARTBEAT STATE
 # =========================================================
@@ -75,9 +292,7 @@ WORKER_WEBHOOK_URL = os.environ.get(
     "WORKER_WEBHOOK_URL"
 )
 
-LIFF_ID = os.environ.get(
-    "LIFF_ID"
-)
+LIFF_ID = os.environ.get("LIFF_ID")
 
 # =========================================================
 # VALIDATION
@@ -98,9 +313,7 @@ required_env = {
 
     "WORKER_WEBHOOK_URL":
         WORKER_WEBHOOK_URL,
-
-    "LIFF_ID":
-        LIFF_ID
+    "LIFF_ID": LIFF_ID   
 }
 
 for k, v in required_env.items():
@@ -108,6 +321,8 @@ for k, v in required_env.items():
     if not v:
         raise RuntimeError(f"Missing {k}")
 
+# =========================================================
+# FIREBASE
 # =========================================================
 # FIREBASE
 # =========================================================
@@ -153,23 +368,11 @@ worker_db = firestore.client(
     worker_app
 )
 
+# IMPORTANT
 bucket = storage.bucket(
     app=worker_app
 )
 
-
-
-# =========================================================
-# START HEARTBEAT LAZY
-# =========================================================
-@app.before_request
-def before_first_request():
-
-    global heartbeat_started
-
-    if not heartbeat_started:
-
-        start_heartbeat_once()
 # =========================================================
 # LINE API
 # =========================================================
@@ -191,7 +394,7 @@ LINE_HEADERS = {
 }
 
 # =========================================================
-# HEARTBEAT LOOP
+# HEARTBEAT LOOP กระตุ้กไปที่ HUB  ให้รู้ว่ายังonline อยู่
 # =========================================================
 def heartbeat_loop():
 
@@ -227,12 +430,13 @@ def heartbeat_loop():
 
             print("✅ HEARTBEAT OK")
 
-        except Exception:
+        except Exception as e:
 
             print("❌ HEARTBEAT ERROR")
 
             traceback.print_exc()
 
+        # LOOP EVERY 30 SEC
         time.sleep(30)
 
 # =========================================================
@@ -257,7 +461,10 @@ def start_heartbeat_once():
 
     print("🚀 HEARTBEAT STARTED")
 
- 
+# =========================================================
+# START HEARTBEAT ON BOOT
+# =========================================================
+start_heartbeat_once()
 
 # =========================================================
 # HOME
@@ -279,9 +486,7 @@ def check_register():
             silent=True
         ) or {}
 
-        user_id = body.get(
-            "user_id"
-        )
+        user_id = body.get("user_id")
 
         if not user_id:
 
@@ -329,21 +534,21 @@ def register_user():
 
         print("REGISTER BODY =", body)
 
-        user_id = body.get(
-            "user_id"
-        )
+        user_id = body.get("user_id")
 
         if not user_id:
 
             return jsonify({
 
-                "status":
-                    "error",
+                "status": "error",
 
-                "message":
-                    "no user_id"
+                "message": "no user_id"
 
             }), 400
+
+        # ====================================
+        # SAVE USER
+        # ====================================
 
         worker_db.collection("user") \
             .document(user_id) \
@@ -375,11 +580,9 @@ def register_user():
 
         return jsonify({
 
-            "status":
-                "success",
+            "status": "success",
 
-            "message":
-                "ลงทะเบียนสำเร็จ"
+            "message": "ลงทะเบียนสำเร็จ"
         })
 
     except Exception as e:
@@ -388,11 +591,9 @@ def register_user():
 
         return jsonify({
 
-            "status":
-                "error",
+            "status": "error",
 
-            "message":
-                str(e)
+            "message": str(e)
 
         }), 500
 
@@ -428,8 +629,7 @@ def reply_message(reply_token, text):
     except Exception as e:
 
         print("reply error:", e)
-
-# =========================================================
+#=====================================
 def push_message(user_id, text):
 
     try:
@@ -459,136 +659,8 @@ def push_message(user_id, text):
     except Exception as e:
 
         print("push error:", e)
+#---------------------------------------------------------
 
-# =========================================================
-# GENERIC DATASET COMMAND
-# FORMAT:
-# imagenumber 5
-# imagecolor red
-# imagemater water
-# =========================================================
-def image_dataset_command(
-
-    event,
-    parts,
-    project_name,
-    validate_number=False
-):
-
-    try:
-
-        reply_token = event.get(
-            "replyToken"
-        )
-
-        source = event.get(
-            "source",
-            {}
-        )
-
-        user_id = source.get(
-            "userId"
-        )
-
-        # ====================================
-        # VALIDATE
-        # ====================================
-
-        if len(parts) < 2:
-
-            reply_message(
-
-                reply_token,
-
-                f"รูปแบบ:\n"
-                f"{project_name} label"
-            )
-
-            return jsonify({
-                "status": "error"
-            })
-
-        # ====================================
-        # LABEL
-        # ====================================
-
-        label_name = parts[1].strip().lower()
-
-        # ====================================
-        # NUMBER VALIDATION
-        # ====================================
-
-        if validate_number:
-
-            if not label_name.isdigit():
-
-                reply_message(
-
-                    reply_token,
-
-                    "label ต้องเป็นตัวเลข\n"
-                    "เช่น:\n"
-                    "imagenumber 5"
-                )
-
-                return jsonify({
-                    "status": "error"
-                })
-
-        # ====================================
-        # SAVE SESSION
-        # ====================================
-
-        worker_db.collection(
-            "dataset_session"
-        ).document(user_id).set({
-
-            "mode":
-                "dataset",
-
-            "project":
-                project_name,
-
-            "label":
-                label_name,
-
-            "updated_at":
-                datetime.utcnow()
-        })
-
-        print("SESSION SAVED")
-
-        # ====================================
-        # REPLY
-        # ====================================
-
-        reply_message(
-
-            reply_token,
-
-            f"บันทึกเรียบร้อย\n"
-            f"PROJECT: {project_name}\n"
-            f"CLASS: {label_name}\n\n"
-            f"ส่งรูปได้เลย"
-        )
-
-        return jsonify({
-            "status": "success"
-        })
-
-    except Exception as e:
-
-        traceback.print_exc()
-
-        return jsonify({
-
-            "status":
-                "error",
-
-            "message":
-                str(e)
-
-        }), 500
 
 # =========================================================
 # MAIN ROUTE
@@ -631,7 +703,7 @@ def main_route():
             )
 
             # ====================================
-            # TEXT
+            # TEXT MESSAGE
             # ====================================
             if message_type == "text":
 
@@ -645,52 +717,37 @@ def main_route():
                 command = parts[0].lower()
 
                 # ====================================
-                # DOWNLOAD
+                # IMAGE COLOR
+                # imagecolor red
                 # ====================================
-                if command == "download":
+                if command == "imagecolor":
 
-                    return download_dataset(
+                    return imagecolor(
                         event,
                         parts
                     )
 
                 # ====================================
                 # IMAGE NUMBER
+                # imagenumber 5
                 # ====================================
                 elif command == "imagenumber":
 
-                    return image_dataset_command(
-
-                        event=event,
-
-                        parts=parts,
-
-                        project_name="imagenumber",
-
-                        validate_number=True
+                    return imagenumber(
+                        event,
+                        parts
                     )
+                elif command == "download":
+
+                     return download_dataset( event, parts )  
 
                 # ====================================
-                # GENERIC FORMAT
-                # imagemater water
-                # imagecolor red
-                # imagefruit banana
+                # VDO
+                # VDO imagenumber
                 # ====================================
-                elif command.startswith("image"):
-
-                    return image_dataset_command(
-
-                        event=event,
-
-                        parts=parts,
-
-                        project_name=command,
-
-                        validate_number=False
-                    )
-
+                                
                 # ====================================
-                # UNKNOWN
+                # UNKNOWN COMMAND
                 # ====================================
                 else:
 
@@ -722,16 +779,240 @@ def main_route():
 
         return jsonify({
 
-            "status":
-                "error",
+            "status": "error",
 
-            "message":
-                str(e)
+            "message": str(e)
 
         }), 500
+# =========================================================
+# OPEN VDO AI
+# vdo imagenumber
+# =========================================================
+ 
+# =========================================================
+# IMAGE COLOR
+# imagecolor red
+# =========================================================
+def imagecolor(event, parts):
 
+    try:
+
+        reply_token = event.get(
+            "replyToken"
+        )
+
+        source = event.get(
+            "source",
+            {}
+        )
+
+        user_id = source.get(
+            "userId"
+        )
+
+        # ====================================
+        # VALIDATE
+        # ====================================
+
+        if len(parts) < 2:
+
+            reply_message(
+
+                reply_token,
+
+                "รูปแบบ:\n"
+                "imagecolor red"
+            )
+
+            return jsonify({
+                "status": "error"
+            })
+
+        # ====================================
+        # GET LABEL
+        # ====================================
+
+        project_name = "imagecolor"
+
+        label_name = parts[1].lower()
+
+        # ====================================
+        # SAVE SESSION
+        # ====================================
+
+        worker_db.collection(
+            "dataset_session"
+        ).document(user_id).set({
+
+            "mode":
+                "imagecolor",
+
+            "project":
+                project_name,
+
+            "label":
+                label_name,
+
+            "updated_at":
+                datetime.utcnow()
+        })
+
+        print("SESSION SAVED")
+
+        # ====================================
+        # REPLY
+        # ====================================
+
+        reply_message(
+
+            reply_token,
+
+            f"บันทึกเรียบร้อย\n"
+            f"PROJECT: {project_name}\n"
+            f"class: {label_name}\n\n"
+            f"ส่งรูปหมวด {label_name}"
+        )
+
+        return jsonify({
+            "status": "success"
+        })
+
+    except Exception as e:
+
+        traceback.print_exc()
+
+        return jsonify({
+
+            "status": "error",
+
+            "message": str(e)
+
+        }), 500
+# =========================================================
+# IMAGE NUMBER
+# imagenumber  
+# =========================================================
+def imagenumber(event, parts):
+
+    try:
+
+        reply_token = event.get(
+            "replyToken"
+        )
+
+        source = event.get(
+            "source",
+            {}
+        )
+
+        user_id = source.get(
+            "userId"
+        )
+
+        # ====================================
+        # VALIDATE
+        # ====================================
+
+        if len(parts) < 2:
+
+            reply_message(
+
+                reply_token,
+
+                "รูปแบบ:\n"
+                "imagenumber 5"
+            )
+
+            return jsonify({
+                "status": "error"
+            })
+
+        # ====================================
+        # GET LABEL
+        # ====================================
+
+        label_name = parts[1].strip()
+
+        # ====================================
+        # CHECK NUMBER
+        # ====================================
+
+        if not label_name.isdigit():
+
+            reply_message(
+
+                reply_token,
+
+                "label ต้องเป็นตัวเลข\n"
+                "เช่น:\n"
+                "imagenumber 5"
+            )
+
+            return jsonify({
+                "status": "error"
+            })
+
+        # ====================================
+        # PROJECT
+        # ====================================
+
+        project_name = "imagenumber"
+
+        # ====================================
+        # SAVE SESSION
+        # ====================================
+
+        worker_db.collection(
+            "dataset_session"
+        ).document(user_id).set({
+
+            "mode":
+                "imagenumber",
+
+            "project":
+                project_name,
+
+            "label":
+                label_name,
+
+            "updated_at":
+                datetime.utcnow()
+        })
+
+        print("NUMBER SESSION SAVED")
+
+        # ====================================
+        # REPLY
+        # ====================================
+
+        reply_message(
+
+            reply_token,
+
+            f"บันทึกเรียบร้อย\n"
+            f"PROJECT: {project_name}\n"
+            f"class: {label_name}\n\n"
+            f"ส่งรูปเลข {label_name}"
+        )
+
+        return jsonify({
+            "status": "success"
+        })
+
+    except Exception as e:
+
+        traceback.print_exc()
+
+        return jsonify({
+
+            "status": "error",
+
+            "message": str(e)
+
+        }), 500
 # =========================================================
 # DOWNLOAD DATASET
+# download imagecolor red
 # =========================================================
 def download_dataset(event, parts):
 
@@ -741,30 +1022,52 @@ def download_dataset(event, parts):
             "replyToken"
         )
 
-        if len(parts) < 2:
+        # ====================================
+        # VALIDATE
+        # ====================================
+
+        if len(parts) < 3:
 
             reply_message(
 
                 reply_token,
 
                 "รูปแบบ:\n"
-                "download imagenumber"
+                "download imagecolor red"
             )
 
             return jsonify({
                 "status": "error"
             })
 
+        # ====================================
+        # GET PROJECT / LABEL
+        # ====================================
+
         project_name = parts[1].lower()
 
-        print(
-            "DOWNLOAD PROJECT =",
-            project_name
-        )
+        label_name = parts[2].lower()
+
+        print("DOWNLOAD PROJECT =", project_name)
+        print("DOWNLOAD LABEL =", label_name)
+
+        # ====================================
+        # STORAGE PREFIX
+        # ====================================
 
         storage_prefix = (
             f"{project_name}/"
+            f"{label_name}/"
         )
+
+        print(
+            "PREFIX =",
+            storage_prefix
+        )
+
+        # ====================================
+        # GET FILES FROM STORAGE
+        # ====================================
 
         blobs = list(
 
@@ -773,21 +1076,13 @@ def download_dataset(event, parts):
             )
         )
 
-        blobs = [
-
-            blob for blob in blobs
-
-            if not blob.name.endswith("/")
-        ]
-
         if len(blobs) == 0:
 
             reply_message(
 
                 reply_token,
 
-                f"ไม่พบ dataset\n"
-                f"PROJECT: {project_name}"
+                "ไม่พบ dataset"
             )
 
             return jsonify({
@@ -799,26 +1094,12 @@ def download_dataset(event, parts):
             len(blobs)
         )
 
-        MAX_FILES = 3000
-
-        if len(blobs) > MAX_FILES:
-
-            reply_message(
-
-                reply_token,
-
-                f"ไฟล์เกิน {MAX_FILES}\n"
-                f"กรุณาลดจำนวนรูป"
-            )
-
-            return jsonify({
-                "status": "error"
-            })
+        # ====================================
+        # ZIP FILE
+        # ====================================
 
         zip_filename = (
-
-            f"{project_name}_"
-            f"{uuid.uuid4().hex}.zip"
+            f"{project_name}_{label_name}.zip"
         )
 
         zip_temp_path = (
@@ -837,43 +1118,48 @@ def download_dataset(event, parts):
 
             for blob in blobs:
 
-                try:
+                filename = os.path.basename(
+                    blob.name
+                )
 
-                    if blob.name.endswith("/"):
-                        continue
+                if not filename:
+                    continue
 
-                    print(
-                        "ADD ZIP =",
-                        blob.name
+                temp_file = (
+                    f"/tmp/{filename}"
+                )
+
+                # DOWNLOAD FROM STORAGE
+                blob.download_to_filename(
+                    temp_file
+                )
+
+                # ADD ZIP
+                zipf.write(
+
+                    temp_file,
+
+                    arcname=filename
+                )
+
+                # DELETE TEMP
+                if os.path.exists(
+                    temp_file
+                ):
+                    os.remove(
+                        temp_file
                     )
 
-                    file_bytes = (
-                        blob.download_as_bytes()
-                    )
+        print(
+            "ZIP CREATED =",
+            zip_temp_path
+        )
 
-                    arcname = blob.name.replace(
-                        f"{project_name}/",
-                        ""
-                    )
-
-                    zipf.writestr(
-
-                        arcname,
-
-                        file_bytes
-                    )
-
-                except Exception:
-
-                    print(
-                        "ZIP ERROR =",
-                        blob.name
-                    )
-
-                    traceback.print_exc()
+        # ====================================
+        # UPLOAD ZIP
+        # ====================================
 
         zip_storage_path = (
-
             f"downloads/"
             f"{zip_filename}"
         )
@@ -893,6 +1179,15 @@ def download_dataset(event, parts):
 
         zip_url = zip_blob.public_url
 
+        print(
+            "ZIP URL =",
+            zip_url
+        )
+
+        # ====================================
+        # DELETE ZIP TEMP
+        # ====================================
+
         if os.path.exists(
             zip_temp_path
         ):
@@ -901,12 +1196,17 @@ def download_dataset(event, parts):
                 zip_temp_path
             )
 
+        # ====================================
+        # REPLY
+        # ====================================
+
         reply_message(
 
             reply_token,
 
             f"DOWNLOAD READY\n\n"
             f"PROJECT: {project_name}\n"
+            f"CLASS: {label_name}\n"
             f"FILES: {len(blobs)}\n\n"
             f"{zip_url}"
         )
@@ -930,129 +1230,13 @@ def download_dataset(event, parts):
 
         return jsonify({
 
-            "status":
-                "error",
+            "status": "error",
 
-            "message":
-                str(e)
+            "message": str(e)
 
-        }), 500
-
+        }), 500        
 # =========================================================
-# AUTO CROP IMAGE
-# =========================================================
-def auto_crop_image(pil_image):
-
-    try:
-
-        image_np = np.array(
-            pil_image
-        )
-
-        image_cv = cv2.cvtColor(
-
-            image_np,
-
-            cv2.COLOR_RGB2BGR
-        )
-
-        gray = cv2.cvtColor(
-
-            image_cv,
-
-            cv2.COLOR_BGR2GRAY
-        )
-
-        blur = cv2.GaussianBlur(
-
-            gray,
-
-            (5, 5),
-
-            0
-        )
-
-        _, thresh = cv2.threshold(
-
-            blur,
-
-            120,
-
-            255,
-
-            cv2.THRESH_BINARY_INV
-        )
-
-        contours, _ = cv2.findContours(
-
-            thresh,
-
-            cv2.RETR_EXTERNAL,
-
-            cv2.CHAIN_APPROX_SIMPLE
-        )
-
-        if len(contours) == 0:
-
-            print("NO CONTOUR")
-
-            return pil_image
-
-        biggest = max(
-
-            contours,
-
-            key=cv2.contourArea
-        )
-
-        x, y, w, h = cv2.boundingRect(
-            biggest
-        )
-
-        padding = 20
-
-        x = max(0, x - padding)
-        y = max(0, y - padding)
-
-        w = w + (padding * 2)
-        h = h + (padding * 2)
-
-        img_h, img_w = image_cv.shape[:2]
-
-        if x + w > img_w:
-            w = img_w - x
-
-        if y + h > img_h:
-            h = img_h - y
-
-        crop = image_cv[
-            y:y+h,
-            x:x+w
-        ]
-
-        if crop.size == 0:
-
-            return pil_image
-
-        crop_rgb = cv2.cvtColor(
-
-            crop,
-
-            cv2.COLOR_BGR2RGB
-        )
-
-        return Image.fromarray(
-            crop_rgb
-        )
-
-    except Exception:
-
-        print("AUTO CROP ERROR")
-
-        traceback.print_exc()
-
-        return pil_image
-
+# HANDLE IMAGE
 # =========================================================
 # HANDLE IMAGE
 # =========================================================
@@ -1079,7 +1263,7 @@ def handle_image(event):
         )
 
         # ====================================
-        # SESSION
+        # GET SESSION
         # ====================================
 
         session_doc = worker_db.collection(
@@ -1119,10 +1303,14 @@ def handle_image(event):
 
         message_id = message.get("id")
 
+        print("MESSAGE ID =", message_id)
+
         image_url = (
             "https://api-data.line.me/v2/bot/message/"
             f"{message_id}/content"
         )
+
+        print("DOWNLOAD IMAGE FROM LINE")
 
         r = requests.get(
 
@@ -1137,7 +1325,11 @@ def handle_image(event):
             timeout=30
         )
 
+        print("LINE STATUS =", r.status_code)
+
         if r.status_code != 200:
+
+            print("LINE ERROR =", r.text)
 
             reply_message(
 
@@ -1151,26 +1343,42 @@ def handle_image(event):
                 "status": "error"
             })
 
+        # ====================================
+        # OPEN IMAGE
+        # ====================================
+
         image = Image.open(
             BytesIO(r.content)
         )
+
+        # ====================================
+        # RGB
+        # ====================================
 
         image = image.convert(
             "RGB"
         )
 
-        image = auto_crop_image(
-            image
-        )
+        # ====================================
+        # RESIZE
+        # ====================================
 
         image = image.resize(
             (224, 224)
         )
 
+        # ====================================
+        # FILE NAME
+        # ====================================
+
         filename = (
             str(uuid.uuid4())
             + ".jpg"
         )
+
+        # ====================================
+        # TEMP PATH
+        # ====================================
 
         temp_path = (
             f"/tmp/{filename}"
@@ -1183,9 +1391,13 @@ def handle_image(event):
             format="JPEG"
         )
 
+        print(
+            "IMAGE SAVED =",
+            temp_path
+        )
+
         # ====================================
-        # STORAGE FORMAT
-        # project/label/file.jpg
+        # STORAGE PATH
         # ====================================
 
         storage_path = (
@@ -1201,7 +1413,7 @@ def handle_image(event):
         )
 
         # ====================================
-        # UPLOAD
+        # UPLOAD STORAGE
         # ====================================
 
         blob = bucket.blob(
@@ -1220,24 +1432,18 @@ def handle_image(event):
         public_url = blob.public_url
 
         print("UPLOAD SUCCESS")
+        print(public_url)
 
         # ====================================
-        # GENERIC FIRESTORE FORMAT
-        #
-        # dataset
-        #   project
-        #       imagenumber
-        #
-        # subcollection:
-        #   items
+        # SAVE FIRESTORE
         # ====================================
 
         worker_db.collection(
-            "dataset"
-        ).document(
             project_name
+        ).document(
+            label_name
         ).collection(
-            "items"
+            "dataset"
         ).add({
 
             "user_id":
@@ -1267,30 +1473,15 @@ def handle_image(event):
 
         print("DATASET SAVED")
 
-        # ====================================
-        # COUNT
-        # ====================================
+         # ====================================
+       # COUNT IMAGES IN CLASS
+       # ====================================
 
-        dataset_docs = worker_db.collection(
-            "dataset"
-        ).document(
-            project_name
-        ).collection(
-            "items"
-        ).where(
-            "label",
-            "==",
-            label_name
-        ).get()
+        dataset_docs = worker_db.collection(project_name ).document(label_name ).collection("dataset" ).get()
 
-        total_images = len(
-            dataset_docs
-        )
+        total_images = len( dataset_docs )
 
-        print(
-            "TOTAL IMAGES =",
-            total_images
-        )
+        print("TOTAL IMAGES =",total_images)
 
         # ====================================
         # DELETE TEMP
@@ -1301,7 +1492,7 @@ def handle_image(event):
         ):
 
             os.remove(
-                temp_path
+                temp_path  
             )
 
         # ====================================
@@ -1310,14 +1501,10 @@ def handle_image(event):
 
         reply_message(
 
-            reply_token,
-
-            f"บันทึกรูปสำเร็จ\n"
-            f"PROJECT: {project_name}\n"
-            f"CLASS: {label_name}\n"
-            f"จำนวนรูป: {total_images}\n\n"
-            f"ส่งรูปต่อได้เลย"
-        )
+                       reply_token, f"บันทึกรูปสำเร็จ class: {label_name}\n"
+                                    f"จำนวนรูป: {total_images}\n"
+                                    f"ส่งรูปต่อไปใน class: {label_name}"
+                          )
 
         return jsonify({
             "status": "success"
@@ -1338,16 +1525,11 @@ def handle_image(event):
 
         return jsonify({
 
-            "status":
-                "error",
+            "status": "error",
 
-            "message":
-                str(e)
+            "message": str(e)
 
         }), 500
-
-# =========================================================
-# WORKER WEBHOOK
 # =========================================================
 @app.route("/worker-webhook", methods=["POST"])
 def worker_webhook():
@@ -1389,6 +1571,10 @@ def worker_webhook():
             if not user_id:
                 continue
 
+            # ====================================
+            # GET USER
+            # ====================================
+
             user_doc = worker_db.collection("user") \
                 .document(user_id) \
                 .get()
@@ -1404,7 +1590,7 @@ def worker_webhook():
             )
 
             # ====================================
-            # MESSAGE
+            # MESSAGE EVENT
             # ====================================
 
             if event_type == "message":
@@ -1419,6 +1605,7 @@ def worker_webhook():
 
                 print("TEXT =", text)
 
+                # SAVE CHAT LOG
                 worker_db.collection("chat_logs") \
                     .add({
 
@@ -1435,6 +1622,7 @@ def worker_webhook():
                             datetime.utcnow()
                     })
 
+                # COMMANDS
                 if text.lower() == "ping":
 
                     reply_message(
@@ -1464,7 +1652,7 @@ def worker_webhook():
                     )
 
             # ====================================
-            # FOLLOW
+            # FOLLOW EVENT
             # ====================================
 
             elif event_type == "follow":
@@ -1484,33 +1672,25 @@ def worker_webhook():
 
         return jsonify({
 
-            "status":
-                "error",
+            "status": "error",
 
-            "message":
-                str(e)
+            "message": str(e)
 
-        }), 500
-
+        }), 500 
+ 
 # =========================================================
 # RUN
-# =========================================================
+# ======================================================
 if __name__ == "__main__":
-
-    print("RUN APP...")
-
-    port = int(
-        os.environ.get(
-            "PORT",
-            8080
-        )
-    )
 
     app.run(
 
         host="0.0.0.0",
 
-        port=port,
-
-        debug=False
+        port=int(
+            os.environ.get(
+                "PORT",
+                8080
+            )
+        )
     )
