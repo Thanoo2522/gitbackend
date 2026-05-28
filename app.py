@@ -157,6 +157,19 @@ bucket = storage.bucket(
     app=worker_app
 )
 
+
+
+# =========================================================
+# START HEARTBEAT LAZY
+# =========================================================
+@app.before_request
+def before_first_request():
+
+    global heartbeat_started
+
+    if not heartbeat_started:
+
+        start_heartbeat_once()
 # =========================================================
 # LINE API
 # =========================================================
@@ -244,10 +257,7 @@ def start_heartbeat_once():
 
     print("🚀 HEARTBEAT STARTED")
 
-# =========================================================
-# START HEARTBEAT ON BOOT
-# =========================================================
-start_heartbeat_once()
+ 
 
 # =========================================================
 # HOME
@@ -1487,14 +1497,20 @@ def worker_webhook():
 # =========================================================
 if __name__ == "__main__":
 
+    print("RUN APP...")
+
+    port = int(
+        os.environ.get(
+            "PORT",
+            8080
+        )
+    )
+
     app.run(
 
         host="0.0.0.0",
 
-        port=int(
-            os.environ.get(
-                "PORT",
-                8080
-            )
-        )
+        port=port,
+
+        debug=False
     )
