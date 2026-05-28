@@ -1,5 +1,4 @@
  
-#from click import command
 from flask import Flask, request, jsonify
 from flask import render_template
 
@@ -17,6 +16,7 @@ from firebase_admin import credentials, firestore, storage
 
 from PIL import Image
 from io import BytesIO
+
 import uuid
 import zipfile
 
@@ -318,10 +318,11 @@ def create_storage_folder(folder_path):
         traceback.print_exc()
 
 # =========================================================
-# AUTO DATASET COMMAND
+# GENERIC DATASET COMMAND
+#
 # imagecolor red
-# imageinsect fly
 # imagemeter water
+# imagefruit banana
 # =========================================================
 def image_dataset_command(event, parts):
 
@@ -347,10 +348,10 @@ def image_dataset_command(event, parts):
 
                 reply_token,
 
-                "รูปแบบ:\n"
+                "รูปแบบ:\n\n"
                 "imagecolor red\n"
-                "imageinsect fly\n"
-                "imagemeter water"
+                "imagemeter water\n"
+                "imagefruit banana"
             )
 
             return jsonify({
@@ -360,14 +361,13 @@ def image_dataset_command(event, parts):
         # PROJECT
         project_name = parts[0].lower()
 
-        # LABEL
-        label_name = parts[1].lower()
-
-        # CLEAN
         project_name = project_name.replace(
             " ",
             ""
         )
+
+        # LABEL
+        label_name = parts[1].lower()
 
         label_name = label_name.replace(
             " ",
@@ -397,7 +397,7 @@ def image_dataset_command(event, parts):
                 datetime.utcnow()
         })
 
-        # SAVE PROJECT INFO
+        # SAVE PROJECT
         worker_db.collection(
             "dataset_projects"
         ).document(project_name).set({
@@ -410,7 +410,7 @@ def image_dataset_command(event, parts):
 
         }, merge=True)
 
-        # SAVE LABEL INFO
+        # SAVE LABEL
         worker_db.collection(
             "dataset_projects"
         ).document(project_name).collection(
@@ -433,7 +433,8 @@ def image_dataset_command(event, parts):
             f"พร้อมรับ dataset\n\n"
             f"PROJECT: {project_name}\n"
             f"CLASS: {label_name}\n\n"
-            f"Folder ถูกสร้างแล้ว\n"
+            f"Storage:\n"
+            f"{project_name}/{label_name}\n\n"
             f"ส่งรูปได้เลย"
         )
 
@@ -607,6 +608,15 @@ def download_dataset(event, parts):
     except Exception as e:
 
         traceback.print_exc()
+
+        reply_message(
+
+            event.get(
+                "replyToken"
+            ),
+
+            f"DOWNLOAD ERROR\n{str(e)}"
+        )
 
         return jsonify({
 
@@ -882,11 +892,7 @@ def handle_image(event):
 
         # SAVE FIRESTORE
         worker_db.collection(
-            project_name
-        ).document(
-            label_name
-        ).collection(
-            "dataset"
+            "dataset_images"
         ).add({
 
             "user_id":
@@ -915,16 +921,20 @@ def handle_image(event):
         })
 
         # COUNT
-        dataset_docs = worker_db.collection(
+        query = worker_db.collection(
+            "dataset_images"
+        ).where(
+            "project",
+            "==",
             project_name
-        ).document(
+        ).where(
+            "label",
+            "==",
             label_name
-        ).collection(
-            "dataset"
-        ).get()
+        ).stream()
 
         total_images = len(
-            dataset_docs
+            list(query)
         )
 
         # DELETE TEMP
@@ -944,7 +954,8 @@ def handle_image(event):
             f"บันทึกรูปสำเร็จ\n\n"
             f"PROJECT: {project_name}\n"
             f"CLASS: {label_name}\n"
-            f"TOTAL: {total_images}"
+            f"TOTAL: {total_images}\n\n"
+            f"ส่งรูปต่อได้เลย"
         )
 
         return jsonify({
@@ -1024,7 +1035,7 @@ def main_route():
                     ""
                 ).strip()
 
-                parts = text.split(" ")
+                parts = text.split()
 
                 command = parts[0].lower()
 
@@ -1036,7 +1047,7 @@ def main_route():
                         parts
                     )
 
-                # AUTO IMAGE COMMAND
+                # IMAGE COMMAND
                 elif command.startswith("image"):
 
                     return image_dataset_command(
@@ -1053,7 +1064,11 @@ def main_route():
                             "replyToken"
                         ),
 
-                        "ไม่รู้จัก command"
+                        "ไม่รู้จัก command\n\n"
+                        "ตัวอย่าง:\n"
+                        "imagecolor red\n"
+                        "imagemeter water\n"
+                        "download imagecolor"
                     )
 
             # ====================================
