@@ -670,114 +670,97 @@ def main_route():
 
     try:
 
-        body = request.get_json(
-            silent=True
-        ) or {}
+        body = request.get_json(silent=True) or {}
 
         print("=" * 50)
         print("MAIN ROUTE")
-        print(json.dumps(
-            body,
-            indent=2,
-            ensure_ascii=False
-        ))
+        print(json.dumps(body, indent=2, ensure_ascii=False))
         print("=" * 50)
 
-        events = body.get(
-            "events",
-            []
-        )
+        events = body.get("events", [])
 
         for event in events:
 
             if event.get("type") != "message":
                 continue
 
-            message = event.get(
-                "message",
-                {}
-            )
+            message = event.get("message", {})
+            message_type = message.get("type")
 
-            message_type = message.get(
-                "type"
-            )
-
-            # ====================================
+            # =====================================================
             # TEXT MESSAGE
-            # ====================================
+            # =====================================================
             if message_type == "text":
 
-                text = message.get(
-                    "text",
-                    ""
-                ).strip()
-
+                text = message.get("text", "").strip()
                 parts = text.split(" ")
 
                 command = parts[0].lower()
+                user_id = event["source"]["userId"]
+                reply_token = event.get("replyToken")
 
-                # ====================================
-                # IMAGE COLOR
-                # imagecolor red
-                # ====================================
-                if command == "imagecolor":
+                # =====================================================
+                # SYSTEM COMMANDS (reserved)
+                # =====================================================
+                if command == "download":
+                    return download_dataset(event, parts)
 
-                    return imagecolor(
-                        event,
-                        parts
-                    )
+                # =====================================================
+                # UNIVERSAL DATASET MODE (NEW CORE LOGIC)
+                # =====================================================
 
-                # ====================================
-                # IMAGE NUMBER
-                # imagenumber 5
-                # ====================================
-                elif command == "imagenumber":
+                if len(parts) >= 2:
 
-                    return imagenumber(
-                        event,
-                        parts
-                    )
-                elif command == "download":
+                    project = command
+                    label = parts[1].lower()
 
-                     return download_dataset( event, parts )  
+                    print("UNIVERSAL MODE")
+                    print("PROJECT =", project)
+                    print("LABEL =", label)
 
-               # ====================================
-                # UNKNOWN COMMAND
-                # ====================================
-                else:
+                    worker_db.collection("dataset_session") \
+                        .document(user_id) \
+                        .set({
+                            "project": project,
+                            "label": label,
+                            "mode": "universal",
+                            "updated_at": datetime.utcnow()
+                        })
 
                     reply_message(
-
-                        event.get(
-                            "replyToken"
-                        ),
-
-                        "ไม่รู้จัก command"
+                        reply_token,
+                        f"📦 DATASET READY\n\n"
+                        f"PROJECT: {project}\n"
+                        f"LABEL: {label}\n\n"
+                        f"ส่งรูปมาได้เลย"
                     )
 
-            # ====================================
-            # IMAGE MESSAGE
-            # ====================================
-            elif message_type == "image":
+                    return jsonify({"status": "success"})
 
-                return handle_image(
-                    event
+                # fallback
+                reply_message(
+                    reply_token,
+                    "รูปแบบ:\ncommand label\nเช่น imagemeter water"
                 )
 
-        return jsonify({
-            "status": "success"
-        })
+                return jsonify({"status": "error"})
+
+            # =====================================================
+            # IMAGE MESSAGE
+            # =====================================================
+            elif message_type == "image":
+
+                return handle_image(event)
+
+        return jsonify({"status": "success"})
 
     except Exception as e:
 
         traceback.print_exc()
 
         return jsonify({
-
             "status": "error",
-
             "message": str(e)
-
         }), 500
 # =========================================================
  
