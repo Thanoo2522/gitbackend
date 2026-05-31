@@ -1243,131 +1243,261 @@ def imagenumber(event, parts):
         }), 500
 # =========================================================
 # DOWNLOAD DATASET
-# download imagecolor red
 # =========================================================
 def download_dataset(event, parts):
 
     try:
 
-        reply_token = event.get("replyToken")
+        reply_token = event.get(
+            "replyToken"
+        )
+
+        user_id = event.get(
+            "source",
+            {}
+        ).get(
+            "userId"
+        )
 
         # ====================================
         # VALIDATE
         # ====================================
+
         if len(parts) < 2:
 
             reply_message(
+
                 reply_token,
-                "รูปแบบ:\n"
+
+                "รูปแบบ:\n\n"
                 "download imagenumber\n"
-                "download imagecolor red\n"
-                "download imagemeter water v2"
+                "download imagenumber 1\n"
+                "download plant rust"
             )
 
-            return jsonify({"status": "error"})
+            return jsonify({
+                "status": "error"
+            })
 
         # ====================================
-        # BUILD UNIVERSAL PATH
+        # REMOVE download
         # ====================================
-        # remove "download"
+
         path_parts = parts[1:]
 
-        storage_prefix = "/".join(path_parts) + "/"
+        # ====================================
+        # SUPPORT:
+        # download imagenumber
+        # download imagenumber 1
+        # ====================================
 
-        project_name = path_parts[0]
-        label_name = "/".join(path_parts[1:]) if len(path_parts) > 1 else "ALL"
+        storage_prefix = (
 
-        print("UNIVERSAL PREFIX =", storage_prefix)
+            f"{user_id}/"
+            + "/".join(path_parts)
+            + "/"
+        )
+
+        print("=" * 50)
+        print("DOWNLOAD DATASET")
+        print("USER =", user_id)
+        print("PREFIX =", storage_prefix)
+        print("=" * 50)
 
         # ====================================
         # GET FILES
         # ====================================
-        blobs = list(bucket.list_blobs(prefix=storage_prefix))
 
-        if len(blobs) == 0:
+        blobs = list(
 
-            reply_message(
-                reply_token,
-                "ไม่พบ dataset"
+            bucket.list_blobs(
+                prefix=storage_prefix
             )
+        )
 
-            return jsonify({"status": "error"})
+        # FILTER FOLDER
+        blobs = [
+
+            b for b in blobs
+            if not b.name.endswith("/")
+        ]
 
         print("TOTAL FILES =", len(blobs))
 
         # ====================================
-        # ZIP NAME (SAFE)
+        # EMPTY
         # ====================================
-        safe_label = label_name.replace("/", "_")
 
-        zip_filename = f"{project_name}_{safe_label}.zip"
-        zip_temp_path = f"/tmp/{zip_filename}"
+        if len(blobs) == 0:
+
+            reply_message(
+
+                reply_token,
+
+                "ไม่พบ dataset\n\n"
+                f"{storage_prefix}"
+            )
+
+            return jsonify({
+                "status": "error"
+            })
+
+        # ====================================
+        # SAFE ZIP NAME
+        # ====================================
+
+        safe_name = "_".join(
+            path_parts
+        )
+
+        zip_filename = (
+            f"{safe_name}.zip"
+        )
+
+        zip_temp_path = (
+            f"/tmp/{zip_filename}"
+        )
 
         # ====================================
         # CREATE ZIP
         # ====================================
-        with zipfile.ZipFile(zip_temp_path, "w", zipfile.ZIP_DEFLATED) as zipf:
+
+        with zipfile.ZipFile(
+
+            zip_temp_path,
+
+            "w",
+
+            zipfile.ZIP_DEFLATED
+
+        ) as zipf:
 
             for blob in blobs:
 
-                filename = os.path.basename(blob.name)
+                try:
 
-                if not filename:
-                    continue
+                    filename = os.path.basename(
+                        blob.name
+                    )
 
-                temp_file = f"/tmp/{filename}"
+                    if not filename:
+                        continue
 
-                blob.download_to_filename(temp_file)
+                    temp_file = (
+                        f"/tmp/{filename}"
+                    )
 
-                # keep full structure inside zip
-                zipf.write(temp_file, arcname=blob.name)
+                    # DOWNLOAD
+                    blob.download_to_filename(
+                        temp_file
+                    )
 
-                if os.path.exists(temp_file):
-                    os.remove(temp_file)
+                    # KEEP STRUCTURE
+                    zipf.write(
+
+                        temp_file,
+
+                        arcname=blob.name.replace(
+                            f"{user_id}/",
+                            ""
+                        )
+                    )
+
+                    # DELETE TEMP
+                    if os.path.exists(
+                        temp_file
+                    ):
+
+                        os.remove(
+                            temp_file
+                        )
+
+                except Exception:
+
+                    traceback.print_exc()
 
         # ====================================
         # UPLOAD ZIP
         # ====================================
-        zip_storage_path = f"downloads/{zip_filename}"
 
-        zip_blob = bucket.blob(zip_storage_path)
-        zip_blob.upload_from_filename(zip_temp_path, content_type="application/zip")
+        zip_storage_path = (
+
+            f"downloads/"
+            f"{user_id}/"
+            f"{zip_filename}"
+        )
+
+        zip_blob = bucket.blob(
+            zip_storage_path
+        )
+
+        zip_blob.upload_from_filename(
+
+            zip_temp_path,
+
+            content_type="application/zip"
+        )
+
+        # IMPORTANT
         zip_blob.make_public()
 
         zip_url = zip_blob.public_url
 
+        print("ZIP URL =", zip_url)
+
         # ====================================
-        # CLEAN
+        # DELETE TEMP ZIP
         # ====================================
-        if os.path.exists(zip_temp_path):
-            os.remove(zip_temp_path)
+
+        if os.path.exists(
+            zip_temp_path
+        ):
+
+            os.remove(
+                zip_temp_path
+            )
 
         # ====================================
         # REPLY
         # ====================================
+
         reply_message(
+
             reply_token,
+
             f"DOWNLOAD READY\n\n"
-            f"PATH: {storage_prefix}\n"
+            f"PATH:\n"
+            f"{storage_prefix}\n\n"
+
             f"FILES: {len(blobs)}\n\n"
+
             f"{zip_url}"
         )
 
-        return jsonify({"status": "success"})
+        return jsonify({
+            "status": "success"
+        })
 
     except Exception as e:
 
         traceback.print_exc()
 
         reply_message(
+
             event.get("replyToken"),
-            f"DOWNLOAD ERROR\n{str(e)}"
+
+            f"DOWNLOAD ERROR\n\n{str(e)}"
         )
 
         return jsonify({
-            "status": "error",
-            "message": str(e)
-        }), 500  
+
+            "status":
+                "error",
+
+            "message":
+                str(e)
+
+        }), 500
 # =========================================================
 # HANDLE IMAGE
 # =========================================================
