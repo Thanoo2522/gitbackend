@@ -762,6 +762,22 @@ def main_route():
                 print("TEXT =", text)
 
                 # =========================================
+                # USER REF
+                # =========================================
+
+                user_ref = worker_db.collection(
+                    "user"
+                ).document(
+                    user_id
+                )
+
+                session_ref = user_ref.collection(
+                    "dataset_session"
+                ).document(
+                    user_id
+                )
+
+                # =========================================
                 # DOWNLOAD
                 # =========================================
 
@@ -782,11 +798,7 @@ def main_route():
 
                 if text.lower() == "reset":
 
-                    worker_db.collection(
-                        "dataset_session"
-                    ).document(
-                        user_id
-                    ).delete()
+                    session_ref.delete()
 
                     reply_message(
 
@@ -805,11 +817,7 @@ def main_route():
 
                 if text.lower() == "session":
 
-                    session_doc = worker_db.collection(
-                        "dataset_session"
-                    ).document(
-                        user_id
-                    ).get()
+                    session_doc = session_ref.get()
 
                     if not session_doc.exists:
 
@@ -945,11 +953,7 @@ def main_route():
                 # SAVE SESSION
                 # =========================================
 
-                worker_db.collection(
-                    "dataset_session"
-                ).document(
-                    user_id
-                ).set({
+                session_ref.set({
 
                     "project":
                         project_name,
@@ -1018,8 +1022,6 @@ def main_route():
                 str(e)
 
         }), 500
-# =========================================================
- 
 # =========================================================
 # IMAGE COLOR
 # imagecolor red
@@ -1465,11 +1467,10 @@ def download_dataset(event, parts):
 
             reply_token,
 
-            f"DOWNLOAD READY\n\n"
-            f"PATH:\n"
-            f"{storage_prefix}\n\n"
+            f"DOWNLOAD: READY\n\n"
+            #f"PATH:\n" f"{storage_prefix}\n\n"
 
-            f"FILES: {len(blobs)}\n\n"
+            f"FILES: {len(blobs)}\n"
 
             f"{zip_url}"
         )
@@ -1528,6 +1529,10 @@ def handle_image(event):
         # ====================================
 
         session_doc = worker_db.collection(
+            "user"
+        ).document(
+            user_id
+        ).collection(
             "dataset_session"
         ).document(
             user_id
@@ -1558,6 +1563,7 @@ def handle_image(event):
         )
 
         resize_width = int(
+
             session_data.get(
                 "resize_width",
                 224
@@ -1565,6 +1571,7 @@ def handle_image(event):
         )
 
         resize_height = int(
+
             session_data.get(
                 "resize_height",
                 224
@@ -1713,60 +1720,35 @@ def handle_image(event):
         public_url = blob.public_url
 
         print("UPLOAD SUCCESS")
+        print(public_url)
 
         # ====================================
-        # SAVE FIRESTORE
+        # COUNT IMAGES FROM STORAGE
         # ====================================
 
-        worker_db.collection(
-            "datasets"
-        ).document(
-            project_name
-        ).collection(
-            label_name
-        ).add({
+        storage_prefix = (
 
-            "user_id":
-                user_id,
+            f"{user_id}/"
+            f"{project_name}/"
+            f"{label_name}/"
+        )
 
-            "project":
-                project_name,
+        blobs = list(
 
-            "label":
-                label_name,
+            bucket.list_blobs(
+                prefix=storage_prefix
+            )
+        )
 
-            "storage_path":
-                storage_path,
+        # FILTER FOLDER
+        blobs = [
 
-            "image_url":
-                public_url,
-
-            "width":
-                resize_width,
-
-            "height":
-                resize_height,
-
-            "created_at":
-                datetime.utcnow()
-        })
-
-        print("DATASET SAVED")
-
-        # ====================================
-        # COUNT IMAGES
-        # ====================================
-
-        dataset_docs = worker_db.collection(
-            "datasets"
-        ).document(
-            project_name
-        ).collection(
-            label_name
-        ).get()
+            b for b in blobs
+            if not b.name.endswith("/")
+        ]
 
         total_images = len(
-            dataset_docs
+            blobs
         )
 
         print(
