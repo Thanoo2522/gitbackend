@@ -21,6 +21,9 @@ import zipfile
 #------------- เกี่ยวกับ AI Model
 import numpy as np
 import tensorflow as tf
+
+
+import pytz
 # =========================================================
 # FLASK
 # =========================================================
@@ -1288,9 +1291,7 @@ def download_dataset(event, parts):
         path_parts = parts[1:]
 
         # ====================================
-        # SUPPORT:
-        # download imagenumber
-        # download imagenumber 1
+        # STORAGE PREFIX
         # ====================================
 
         storage_prefix = (
@@ -1352,8 +1353,30 @@ def download_dataset(event, parts):
             path_parts
         )
 
+        # ====================================
+        # THAI TIMESTAMP
+        # ====================================
+
+        thai_tz = pytz.timezone(
+            "Asia/Bangkok"
+        )
+
+        thai_now = datetime.now(
+            thai_tz
+        )
+
+        timestamp = thai_now.strftime(
+            "%Y%m%d_%H%M%S"
+        )
+
+        # ====================================
+        # ZIP FILE NAME
+        # ====================================
+
         zip_filename = (
-            f"{safe_name}.zip"
+
+            f"{safe_name}_"
+            f"{timestamp}.zip"
         )
 
         zip_temp_path = (
@@ -1419,15 +1442,24 @@ def download_dataset(event, parts):
                     traceback.print_exc()
 
         # ====================================
-        # UPLOAD ZIP
+        # STORAGE PATH
         # ====================================
 
         zip_storage_path = (
 
-            f"downloads/"
             f"{user_id}/"
+            f"downloads/"
             f"{zip_filename}"
         )
+
+        print(
+            "ZIP STORAGE =",
+            zip_storage_path
+        )
+
+        # ====================================
+        # UPLOAD ZIP
+        # ====================================
 
         zip_blob = bucket.blob(
             zip_storage_path
@@ -1460,6 +1492,35 @@ def download_dataset(event, parts):
             )
 
         # ====================================
+        # COUNT DOWNLOADS
+        # ====================================
+
+        download_blobs = list(
+
+            bucket.list_blobs(
+
+                prefix=(
+                    f"{user_id}/downloads/"
+                )
+            )
+        )
+
+        download_blobs = [
+
+            b for b in download_blobs
+            if not b.name.endswith("/")
+        ]
+
+        total_downloads = len(
+            download_blobs
+        )
+
+        print(
+            "TOTAL DOWNLOADS =",
+            total_downloads
+        )
+
+        # ====================================
         # REPLY
         # ====================================
 
@@ -1467,10 +1528,15 @@ def download_dataset(event, parts):
 
             reply_token,
 
-            f"DOWNLOAD: READY\n\n"
-            #f"PATH:\n" f"{storage_prefix}\n\n"
+            f"DOWNLOAD READY\n\n"
+
+            f"PATH:\n"
+            f"{storage_prefix}\n\n"
 
             f"FILES: {len(blobs)}\n"
+
+            f"DOWNLOAD COUNT: "
+            f"{total_downloads}\n\n"
 
             f"{zip_url}"
         )
@@ -1485,7 +1551,9 @@ def download_dataset(event, parts):
 
         reply_message(
 
-            event.get("replyToken"),
+            event.get(
+                "replyToken"
+            ),
 
             f"DOWNLOAD ERROR\n\n{str(e)}"
         )
