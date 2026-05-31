@@ -100,10 +100,10 @@ def get_model(project):
 
     return model
 
+
 # =========================================================
 # PREDICT
 # =========================================================
-
 @app.route("/predict", methods=["POST"])
 def predict():
 
@@ -126,7 +126,7 @@ def predict():
             }), 400
 
         # ====================================
-        # GET DATA
+        # GET FORM DATA
         # ====================================
 
         file = request.files["image"]
@@ -135,17 +135,34 @@ def predict():
             "project"
         )
 
+        # ====================================
+        # DYNAMIC SIZE
+        # ====================================
+
+        width = int(
+            request.form.get(
+                "width",
+                224
+            )
+        )
+
+        height = int(
+            request.form.get(
+                "height",
+                224
+            )
+        )
+
         print("=" * 50)
         print("PREDICT REQUEST")
         print("=" * 50)
 
-        print(
-            "PROJECT =",
-            project
-        )
+        print("PROJECT =", project)
+        print("WIDTH =", width)
+        print("HEIGHT =", height)
 
         # ====================================
-        # CHECK PROJECT
+        # VALIDATE
         # ====================================
 
         if not project:
@@ -159,10 +176,6 @@ def predict():
                     "Project is required"
 
             }), 400
-
-        # ====================================
-        # CHECK LABELS
-        # ====================================
 
         if project not in labels:
 
@@ -180,25 +193,44 @@ def predict():
         # LOAD MODEL
         # ====================================
 
-        model = get_model(project)
+        model = get_model(
+            project
+        )
 
-        class_names = labels[project]
+        class_names = labels[
+            project
+        ]
 
         # ====================================
-        # IMAGE PROCESS
+        # OPEN IMAGE
         # ====================================
 
         image = Image.open(
             file.stream
         )
 
-        image = image.convert("RGB")
-
-        image = image.resize(
-            (224, 224)
+        image = image.convert(
+            "RGB"
         )
 
-        img_array = np.array(image)
+        # ====================================
+        # RESIZE
+        # ====================================
+
+        image = image.resize(
+            (
+                width,
+                height
+            )
+        )
+
+        # ====================================
+        # NUMPY
+        # ====================================
+
+        img_array = np.array(
+            image
+        )
 
         img_array = img_array / 255.0
 
@@ -227,7 +259,9 @@ def predict():
             prediction[0][index]
         )
 
-        label = class_names[index]
+        label = class_names[
+            index
+        ]
 
         print(
             "RESULT =",
@@ -248,7 +282,13 @@ def predict():
                 label,
 
             "confidence":
-                confidence
+                confidence,
+
+            "width":
+                width,
+
+            "height":
+                height
         })
 
     except Exception as e:
@@ -659,9 +699,6 @@ def push_message(user_id, text):
     except Exception as e:
 
         print("push error:", e)
-#---------------------------------------------------------
-
-
 # =========================================================
 # MAIN ROUTE
 # =========================================================
@@ -670,97 +707,316 @@ def main_route():
 
     try:
 
-        body = request.get_json(silent=True) or {}
+        body = request.get_json(
+            silent=True
+        ) or {}
 
         print("=" * 50)
         print("MAIN ROUTE")
-        print(json.dumps(body, indent=2, ensure_ascii=False))
+        print(json.dumps(
+            body,
+            indent=2,
+            ensure_ascii=False
+        ))
         print("=" * 50)
 
-        events = body.get("events", [])
+        events = body.get(
+            "events",
+            []
+        )
 
         for event in events:
 
             if event.get("type") != "message":
                 continue
 
-            message = event.get("message", {})
-            message_type = message.get("type")
+            message = event.get(
+                "message",
+                {}
+            )
+
+            message_type = message.get(
+                "type"
+            )
 
             # =====================================================
             # TEXT MESSAGE
             # =====================================================
             if message_type == "text":
 
-                text = message.get("text", "").strip()
-                parts = text.split(" ")
+                text = message.get(
+                    "text",
+                    ""
+                ).strip()
 
-                command = parts[0].lower()
-                user_id = event["source"]["userId"]
-                reply_token = event.get("replyToken")
+                user_id = event[
+                    "source"
+                ][
+                    "userId"
+                ]
 
-                # =====================================================
-                # SYSTEM COMMANDS (reserved)
-                # =====================================================
-                if command == "download":
-                    return download_dataset(event, parts)
-
-                # =====================================================
-                # UNIVERSAL DATASET MODE (NEW CORE LOGIC)
-                # =====================================================
-
-                if len(parts) >= 2:
-
-                    project = command
-                    label = parts[1].lower()
-
-                    print("UNIVERSAL MODE")
-                    print("PROJECT =", project)
-                    print("LABEL =", label)
-
-                    worker_db.collection("dataset_session") \
-                        .document(user_id) \
-                        .set({
-                            "project": project,
-                            "label": label,
-                            "mode": "universal",
-                            "updated_at": datetime.utcnow()
-                        })
-
-                    reply_message(
-                        reply_token,
-                        f"📦 DATASET READY\n\n"
-                        f"PROJECT: {project}\n"
-                        f"LABEL: {label}\n\n"
-                        f"ส่งรูปมาได้เลย"
-                    )
-
-                    return jsonify({"status": "success"})
-
-                # fallback
-                reply_message(
-                    reply_token,
-                    "รูปแบบ:\ncommand label\nเช่น imagemeter water"
+                reply_token = event.get(
+                    "replyToken"
                 )
 
-                return jsonify({"status": "error"})
+                print("TEXT =", text)
+
+                # =========================================
+                # DOWNLOAD
+                # =========================================
+
+                if text.lower().startswith(
+                    "download"
+                ):
+
+                    parts = text.split(" ")
+
+                    return download_dataset(
+                        event,
+                        parts
+                    )
+
+                # =========================================
+                # RESET SESSION
+                # =========================================
+
+                if text.lower() == "reset":
+
+                    worker_db.collection(
+                        "dataset_session"
+                    ).document(
+                        user_id
+                    ).delete()
+
+                    reply_message(
+
+                        reply_token,
+
+                        "ล้าง session แล้ว"
+                    )
+
+                    return jsonify({
+                        "status": "success"
+                    })
+
+                # =========================================
+                # SHOW SESSION
+                # =========================================
+
+                if text.lower() == "session":
+
+                    session_doc = worker_db.collection(
+                        "dataset_session"
+                    ).document(
+                        user_id
+                    ).get()
+
+                    if not session_doc.exists:
+
+                        reply_message(
+                            reply_token,
+                            "ไม่มี session"
+                        )
+
+                        return jsonify({
+                            "status": "error"
+                        })
+
+                    data = session_doc.to_dict()
+
+                    reply_message(
+
+                        reply_token,
+
+                        f"PROJECT: {data.get('project')}\n"
+                        f"CLASS: {data.get('label')}\n"
+                        f"SIZE: "
+                        f"{data.get('resize_width')}x"
+                        f"{data.get('resize_height')}"
+                    )
+
+                    return jsonify({
+                        "status": "success"
+                    })
+
+                # =========================================
+                # FORMAT:
+                # project/class/230x230
+                # =========================================
+
+                path_parts = text.split("/")
+
+                if len(path_parts) < 3:
+
+                    reply_message(
+
+                        reply_token,
+
+                        "รูปแบบ:\n"
+                        "project/class/230x230\n\n"
+                        "ตัวอย่าง:\n"
+                        "imagenumber/5/224x224\n"
+                        "plant/rust/640x480"
+                    )
+
+                    return jsonify({
+                        "status": "error"
+                    })
+
+                # =========================================
+                # PROJECT
+                # =========================================
+
+                project_name = path_parts[0] \
+                    .strip() \
+                    .lower()
+
+                # =========================================
+                # CLASS
+                # =========================================
+
+                class_name = path_parts[1] \
+                    .strip() \
+                    .lower()
+
+                # =========================================
+                # SIZE
+                # =========================================
+
+                size_text = path_parts[2] \
+                    .strip() \
+                    .lower()
+
+                if "x" not in size_text:
+
+                    reply_message(
+
+                        reply_token,
+
+                        "ขนาดผิดรูปแบบ\n"
+                        "เช่น 224x224"
+                    )
+
+                    return jsonify({
+                        "status": "error"
+                    })
+
+                try:
+
+                    w, h = size_text.split("x")
+
+                    resize_width = int(w)
+
+                    resize_height = int(h)
+
+                except:
+
+                    reply_message(
+
+                        reply_token,
+
+                        "ขนาดไม่ถูกต้อง\n"
+                        "เช่น 224x224"
+                    )
+
+                    return jsonify({
+                        "status": "error"
+                    })
+
+                # =========================================
+                # VALIDATE SIZE
+                # =========================================
+
+                if resize_width <= 0 \
+                or resize_height <= 0:
+
+                    reply_message(
+
+                        reply_token,
+
+                        "ขนาดต้องมากกว่า 0"
+                    )
+
+                    return jsonify({
+                        "status": "error"
+                    })
+
+                # =========================================
+                # SAVE SESSION
+                # =========================================
+
+                worker_db.collection(
+                    "dataset_session"
+                ).document(
+                    user_id
+                ).set({
+
+                    "project":
+                        project_name,
+
+                    "label":
+                        class_name,
+
+                    "resize_width":
+                        resize_width,
+
+                    "resize_height":
+                        resize_height,
+
+                    "mode":
+                        "universal",
+
+                    "updated_at":
+                        datetime.utcnow()
+                })
+
+                print("SESSION SAVED")
+
+                # =========================================
+                # REPLY
+                # =========================================
+
+                reply_message(
+
+                    reply_token,
+
+                    f"📦 DATASET READY\n\n"
+                    f"PROJECT: {project_name}\n"
+                    f"CLASS: {class_name}\n"
+                    f"SIZE: "
+                    f"{resize_width}x{resize_height}\n\n"
+                    f"ส่งรูปได้ต่อเนื่อง"
+                )
+
+                return jsonify({
+                    "status": "success"
+                })
 
             # =====================================================
             # IMAGE MESSAGE
             # =====================================================
             elif message_type == "image":
 
-                return handle_image(event)
+                return handle_image(
+                    event
+                )
 
-        return jsonify({"status": "success"})
+        return jsonify({
+            "status": "success"
+        })
 
     except Exception as e:
 
         traceback.print_exc()
 
         return jsonify({
-            "status": "error",
-            "message": str(e)
+
+            "status":
+                "error",
+
+            "message":
+                str(e)
+
         }), 500
 # =========================================================
  
@@ -1115,8 +1371,6 @@ def download_dataset(event, parts):
 # =========================================================
 # HANDLE IMAGE
 # =========================================================
-# HANDLE IMAGE
-# =========================================================
 def handle_image(event):
 
     try:
@@ -1145,7 +1399,9 @@ def handle_image(event):
 
         session_doc = worker_db.collection(
             "dataset_session"
-        ).document(user_id).get()
+        ).document(
+            user_id
+        ).get()
 
         if not session_doc.exists:
 
@@ -1154,7 +1410,7 @@ def handle_image(event):
                 reply_token,
 
                 "กรุณาพิมพ์:\n"
-                "imagecolor red"
+                "project/class/224x224"
             )
 
             return jsonify({
@@ -1171,23 +1427,43 @@ def handle_image(event):
             "label"
         )
 
+        resize_width = int(
+            session_data.get(
+                "resize_width",
+                224
+            )
+        )
+
+        resize_height = int(
+            session_data.get(
+                "resize_height",
+                224
+            )
+        )
+
         print("PROJECT =", project_name)
         print("LABEL =", label_name)
+
+        print(
+            "SIZE =",
+            resize_width,
+            resize_height
+        )
 
         # ====================================
         # GET IMAGE FROM LINE
         # ====================================
 
-        message_id = message.get("id")
-
-        print("MESSAGE ID =", message_id)
+        message_id = message.get(
+            "id"
+        )
 
         image_url = (
             "https://api-data.line.me/v2/bot/message/"
             f"{message_id}/content"
         )
 
-        print("DOWNLOAD IMAGE FROM LINE")
+        print("DOWNLOAD IMAGE")
 
         r = requests.get(
 
@@ -1202,11 +1478,12 @@ def handle_image(event):
             timeout=30
         )
 
-        print("LINE STATUS =", r.status_code)
+        print(
+            "LINE STATUS =",
+            r.status_code
+        )
 
         if r.status_code != 200:
-
-            print("LINE ERROR =", r.text)
 
             reply_message(
 
@@ -1228,10 +1505,6 @@ def handle_image(event):
             BytesIO(r.content)
         )
 
-        # ====================================
-        # RGB
-        # ====================================
-
         image = image.convert(
             "RGB"
         )
@@ -1241,7 +1514,11 @@ def handle_image(event):
         # ====================================
 
         image = image.resize(
-            (224, 224)
+
+            (
+                resize_width,
+                resize_height
+            )
         )
 
         # ====================================
@@ -1252,10 +1529,6 @@ def handle_image(event):
             str(uuid.uuid4())
             + ".jpg"
         )
-
-        # ====================================
-        # TEMP PATH
-        # ====================================
 
         temp_path = (
             f"/tmp/{filename}"
@@ -1279,6 +1552,7 @@ def handle_image(event):
 
         storage_path = (
 
+            f"{user_id}/"
             f"{project_name}/"
             f"{label_name}/"
             f"{filename}"
@@ -1309,18 +1583,17 @@ def handle_image(event):
         public_url = blob.public_url
 
         print("UPLOAD SUCCESS")
-        print(public_url)
 
         # ====================================
         # SAVE FIRESTORE
         # ====================================
 
         worker_db.collection(
-            project_name
+            "datasets"
         ).document(
-            label_name
+            project_name
         ).collection(
-            "dataset"
+            label_name
         ).add({
 
             "user_id":
@@ -1339,10 +1612,10 @@ def handle_image(event):
                 public_url,
 
             "width":
-                224,
+                resize_width,
 
             "height":
-                224,
+                resize_height,
 
             "created_at":
                 datetime.utcnow()
@@ -1350,15 +1623,26 @@ def handle_image(event):
 
         print("DATASET SAVED")
 
-         # ====================================
-       # COUNT IMAGES IN CLASS
-       # ====================================
+        # ====================================
+        # COUNT IMAGES
+        # ====================================
 
-        dataset_docs = worker_db.collection(project_name ).document(label_name ).collection("dataset" ).get()
+        dataset_docs = worker_db.collection(
+            "datasets"
+        ).document(
+            project_name
+        ).collection(
+            label_name
+        ).get()
 
-        total_images = len( dataset_docs )
+        total_images = len(
+            dataset_docs
+        )
 
-        print("TOTAL IMAGES =",total_images)
+        print(
+            "TOTAL IMAGES =",
+            total_images
+        )
 
         # ====================================
         # DELETE TEMP
@@ -1369,7 +1653,7 @@ def handle_image(event):
         ):
 
             os.remove(
-                temp_path  
+                temp_path
             )
 
         # ====================================
@@ -1378,10 +1662,16 @@ def handle_image(event):
 
         reply_message(
 
-                       reply_token, f"บันทึกรูปสำเร็จ class: {label_name}\n"
-                                    f"จำนวนรูป: {total_images}\n"
-                                    f"ส่งรูปต่อไปใน class: {label_name}"
-                          )
+            reply_token,
+
+            f"บันทึกรูปสำเร็จ\n\n"
+            f"PROJECT: {project_name}\n"
+            f"CLASS: {label_name}\n"
+            f"SIZE: "
+            f"{resize_width}x{resize_height}\n"
+            f"TOTAL: {total_images}\n\n"
+            f"ส่งรูปต่อได้"
+        )
 
         return jsonify({
             "status": "success"
@@ -1402,9 +1692,11 @@ def handle_image(event):
 
         return jsonify({
 
-            "status": "error",
+            "status":
+                "error",
 
-            "message": str(e)
+            "message":
+                str(e)
 
         }), 500
 # =========================================================
