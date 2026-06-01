@@ -893,10 +893,6 @@ def download_dataset(event, parts):
             "message": str(e)
         }), 500      
 # =========================================================
-# HANDLE IMAGE
-# =========================================================
-# HANDLE IMAGE
-# =========================================================
 def handle_image(event):
 
     try:
@@ -924,8 +920,14 @@ def handle_image(event):
         # ====================================
 
         session_doc = worker_db.collection(
+            "user"
+        ).document(
+            user_id
+        ).collection(
             "dataset_session"
-        ).document(user_id).get()
+        ).document(
+            user_id
+        ).get()
 
         if not session_doc.exists:
 
@@ -934,7 +936,7 @@ def handle_image(event):
                 reply_token,
 
                 "กรุณาพิมพ์:\n"
-                "imagecolor red"
+                "project/class/224x224"
             )
 
             return jsonify({
@@ -951,23 +953,45 @@ def handle_image(event):
             "label"
         )
 
+        resize_width = int(
+
+            session_data.get(
+                "resize_width",
+                224
+            )
+        )
+
+        resize_height = int(
+
+            session_data.get(
+                "resize_height",
+                224
+            )
+        )
+
         print("PROJECT =", project_name)
         print("LABEL =", label_name)
+
+        print(
+            "SIZE =",
+            resize_width,
+            resize_height
+        )
 
         # ====================================
         # GET IMAGE FROM LINE
         # ====================================
 
-        message_id = message.get("id")
-
-        print("MESSAGE ID =", message_id)
+        message_id = message.get(
+            "id"
+        )
 
         image_url = (
             "https://api-data.line.me/v2/bot/message/"
             f"{message_id}/content"
         )
 
-        print("DOWNLOAD IMAGE FROM LINE")
+        print("DOWNLOAD IMAGE")
 
         r = requests.get(
 
@@ -982,11 +1006,12 @@ def handle_image(event):
             timeout=30
         )
 
-        print("LINE STATUS =", r.status_code)
+        print(
+            "LINE STATUS =",
+            r.status_code
+        )
 
         if r.status_code != 200:
-
-            print("LINE ERROR =", r.text)
 
             reply_message(
 
@@ -1008,10 +1033,6 @@ def handle_image(event):
             BytesIO(r.content)
         )
 
-        # ====================================
-        # RGB
-        # ====================================
-
         image = image.convert(
             "RGB"
         )
@@ -1021,7 +1042,11 @@ def handle_image(event):
         # ====================================
 
         image = image.resize(
-            (224, 224)
+
+            (
+                resize_width,
+                resize_height
+            )
         )
 
         # ====================================
@@ -1032,10 +1057,6 @@ def handle_image(event):
             str(uuid.uuid4())
             + ".jpg"
         )
-
-        # ====================================
-        # TEMP PATH
-        # ====================================
 
         temp_path = (
             f"/tmp/{filename}"
@@ -1059,6 +1080,7 @@ def handle_image(event):
 
         storage_path = (
 
+            f"{user_id}/"
             f"{project_name}/"
             f"{label_name}/"
             f"{filename}"
@@ -1092,53 +1114,38 @@ def handle_image(event):
         print(public_url)
 
         # ====================================
-        # SAVE FIRESTORE
+        # COUNT IMAGES FROM STORAGE
         # ====================================
 
-        worker_db.collection(
-            project_name
-        ).document(
-            label_name
-        ).collection(
-            "dataset"
-        ).add({
+        storage_prefix = (
 
-            "user_id":
-                user_id,
+            f"{user_id}/"
+            f"{project_name}/"
+            f"{label_name}/"
+        )
 
-            "project":
-                project_name,
+        blobs = list(
 
-            "label":
-                label_name,
+            bucket.list_blobs(
+                prefix=storage_prefix
+            )
+        )
 
-            "storage_path":
-                storage_path,
+        # FILTER FOLDER
+        blobs = [
 
-            "image_url":
-                public_url,
+            b for b in blobs
+            if not b.name.endswith("/")
+        ]
 
-            "width":
-                224,
+        total_images = len(
+            blobs
+        )
 
-            "height":
-                224,
-
-            "created_at":
-                datetime.utcnow()
-        })
-
-        print("DATASET SAVED")
-
-         # ====================================
-       # COUNT IMAGES IN CLASS
-       # ====================================
-
-        dataset_docs = worker_db.collection(project_name ).document(label_name ).collection("dataset" ).get()
-
-        total_images = len( dataset_docs )
-
-        print("TOTAL IMAGES =",total_images)
+        print(
+            "TOTAL IMAGES =",
+            total_images
+        )
 
         # ====================================
         # DELETE TEMP
@@ -1149,7 +1156,7 @@ def handle_image(event):
         ):
 
             os.remove(
-                temp_path  
+                temp_path
             )
 
         # ====================================
@@ -1158,10 +1165,16 @@ def handle_image(event):
 
         reply_message(
 
-                       reply_token, f"บันทึกรูปสำเร็จ class: {label_name}\n"
-                                    f"จำนวนรูป: {total_images}\n"
-                                    f"ส่งรูปต่อไปใน class: {label_name}"
-                          )
+            reply_token,
+
+            f"บันทึกรูปสำเร็จ\n\n"
+            f"PROJECT: {project_name}\n"
+            f"CLASS: {label_name}\n"
+            f"SIZE: "
+            f"{resize_width}x{resize_height}\n"
+            f"TOTAL: {total_images}\n\n"
+            f"ส่งรูปต่อได้"
+        )
 
         return jsonify({
             "status": "success"
@@ -1182,11 +1195,14 @@ def handle_image(event):
 
         return jsonify({
 
-            "status": "error",
+            "status":
+                "error",
 
-            "message": str(e)
+            "message":
+                str(e)
 
         }), 500
+
 # =========================================================
 @app.route("/worker-webhook", methods=["POST"])
 def worker_webhook():
