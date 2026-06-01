@@ -1,6 +1,4 @@
-#from click import command
 from flask import Flask, request, jsonify
-from flask import render_template
 
 import os
 import json
@@ -12,23 +10,19 @@ import threading
 from datetime import datetime
 
 import firebase_admin
-from firebase_admin import credentials, firestore, storage
+from firebase_admin import credentials, firestore,storage
+
+
 from PIL import Image
 from io import BytesIO
 import uuid
 import base64
 import zipfile
-#------------- เกี่ยวกับ AI Model
-import numpy as np
- 
-
-
 import pytz
-# =========================================== 
+# =========================================================
 # FLASK
 # =========================================================
 app = Flask(__name__)
-
 
 # =========================================================
 # HEARTBEAT STATE
@@ -58,8 +52,6 @@ WORKER_WEBHOOK_URL = os.environ.get(
     "WORKER_WEBHOOK_URL"
 )
 
-LIFF_ID = os.environ.get("LIFF_ID")
-
 # =========================================================
 # VALIDATION
 # =========================================================
@@ -78,8 +70,7 @@ required_env = {
         SERVER_ID,
 
     "WORKER_WEBHOOK_URL":
-        WORKER_WEBHOOK_URL,
-    "LIFF_ID": LIFF_ID   
+        WORKER_WEBHOOK_URL
 }
 
 for k, v in required_env.items():
@@ -88,46 +79,32 @@ for k, v in required_env.items():
         raise RuntimeError(f"Missing {k}")
 
 # =========================================================
-# ---------------------------------------------------------
+# FIREBASE
+# =========================================================
+
 # HUB DB
-# ---------------------------------------------------------
 hub_cred = credentials.Certificate(
     json.loads(HUB_FIREBASE_KEY)
 )
 
 hub_app = firebase_admin.initialize_app(
-
     hub_cred,
-
     name="hub"
 )
 
-hub_db = firestore.client(
-    hub_app
-)
+hub_db = firestore.client(hub_app)
 
-# ---------------------------------------------------------
-# WORKER DB + STORAGE
-# ---------------------------------------------------------
+# WORKER DB
 worker_cred = credentials.Certificate(
     json.loads(WORKER_FIREBASE_KEY)
 )
 
 worker_app = firebase_admin.initialize_app(
-
     worker_cred,
-
-    {
-        "storageBucket":
-            "basework-51f3b.firebasestorage.app"
-    },
-
     name="worker"
 )
 
-worker_db = firestore.client(
-    worker_app
-)
+worker_db = firestore.client(worker_app)
 
 # IMPORTANT
 bucket = storage.bucket(
@@ -155,7 +132,7 @@ LINE_HEADERS = {
 }
 
 # =========================================================
-# HEARTBEAT LOOP กระตุ้กไปที่ HUB  ให้รู้ว่ายังonline อยู่
+# HEARTBEAT LOOP
 # =========================================================
 def heartbeat_loop():
 
@@ -390,7 +367,7 @@ def reply_message(reply_token, text):
     except Exception as e:
 
         print("reply error:", e)
-#=====================================
+
 def push_message(user_id, text):
 
     try:
@@ -420,9 +397,7 @@ def push_message(user_id, text):
     except Exception as e:
 
         print("push error:", e)
-# =========================================================
-# MAIN ROUTE
-# =========================================================
+#---------------------------------------------------------
 @app.route("/main-route", methods=["POST"])
 def main_route():
 
@@ -1377,6 +1352,8 @@ def handle_image(event):
 
         }), 500
 # =========================================================
+# WORKER WEBHOOK
+# =========================================================
 @app.route("/worker-webhook", methods=["POST"])
 def worker_webhook():
 
@@ -1522,7 +1499,7 @@ def worker_webhook():
 
             "message": str(e)
 
-        }), 500 
+        }), 500
  
 # =========================================================
 # RUN
