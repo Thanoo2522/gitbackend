@@ -742,156 +742,267 @@ def main_route():
                 str(e)
 
         }), 500
-# =========================================================
-
-# =========================================================
-# DOWNLOAD DATASET
-# download imagecolor red
-# =========================================================
+#=======================================   
 def download_dataset(event, parts):
 
     try:
 
-        reply_token = event.get("replyToken")
+        reply_token = event.get(
+            "replyToken"
+        )
+
+        user_id = event.get(
+            "source",
+            {}
+        ).get(
+            "userId"
+        )
 
         # ====================================
-        # VALIDATE MIN
+        # VALIDATE
         # ====================================
+
         if len(parts) < 2:
 
             reply_message(
+
                 reply_token,
+
                 "รูปแบบ:\n"
-                "download imagenumber\n"
-                "หรือ\n"
-                "download imagecolor red"
+                "download meter\n"
+                "download meter water"
             )
 
-            return jsonify({"status": "error"})
+            return jsonify({
+                "status": "error"
+            })
 
         # ====================================
         # PROJECT
         # ====================================
+
         project_name = parts[1].lower()
 
         # ====================================
-        # MODE SELECTION
+        # FULL PROJECT
         # ====================================
 
-        # -----------------------------
-        # MODE A: download whole project
-        # -----------------------------
         if len(parts) == 2:
-
-            print("MODE = FULL PROJECT DOWNLOAD")
-
-            storage_prefix = f"{project_name}/"
 
             label_name = "ALL"
 
-        # -----------------------------
-        # MODE B: download specific label
-        # -----------------------------
+            storage_prefix = (
+
+                f"{user_id}/"
+                f"{project_name}/"
+            )
+
+        # ====================================
+        # SINGLE LABEL
+        # ====================================
+
         else:
 
             label_name = parts[2].lower()
 
-            print("MODE = SINGLE LABEL DOWNLOAD")
+            storage_prefix = (
 
-            storage_prefix = f"{project_name}/{label_name}/"
+                f"{user_id}/"
+                f"{project_name}/"
+                f"{label_name}/"
+            )
 
+        print("=" * 50)
+        print("DOWNLOAD DATASET")
+        print("USER =", user_id)
         print("PREFIX =", storage_prefix)
+        print("=" * 50)
 
         # ====================================
         # GET FILES
         # ====================================
-        blobs = list(bucket.list_blobs(prefix=storage_prefix))
 
-        if len(blobs) == 0:
+        blobs = list(
 
-            reply_message(
-                reply_token,
-                "ไม่พบ dataset"
+            bucket.list_blobs(
+                prefix=storage_prefix
             )
+        )
 
-            return jsonify({"status": "error"})
+        # FILTER FOLDER
+
+        blobs = [
+
+            b for b in blobs
+            if not b.name.endswith("/")
+        ]
 
         print("TOTAL FILES =", len(blobs))
 
         # ====================================
+        # EMPTY
+        # ====================================
+
+        if len(blobs) == 0:
+
+            reply_message(
+
+                reply_token,
+
+                f"ไม่พบ dataset\n\n"
+                f"{storage_prefix}"
+            )
+
+            return jsonify({
+                "status": "error"
+            })
+
+        # ====================================
         # ZIP NAME
         # ====================================
+
         zip_filename = (
-            f"{project_name}_{label_name}.zip"
+
+            f"{project_name}_"
+            f"{label_name}.zip"
         )
 
-        zip_temp_path = f"/tmp/{zip_filename}"
+        zip_temp_path = (
+            f"/tmp/{zip_filename}"
+        )
 
         # ====================================
         # CREATE ZIP
         # ====================================
-        with zipfile.ZipFile(zip_temp_path, "w", zipfile.ZIP_DEFLATED) as zipf:
+
+        with zipfile.ZipFile(
+
+            zip_temp_path,
+
+            "w",
+
+            zipfile.ZIP_DEFLATED
+
+        ) as zipf:
 
             for blob in blobs:
 
-                filename = os.path.basename(blob.name)
+                filename = os.path.basename(
+                    blob.name
+                )
 
                 if not filename:
                     continue
 
-                temp_file = f"/tmp/{filename}"
+                temp_file = (
+                    f"/tmp/{filename}"
+                )
 
-                blob.download_to_filename(temp_file)
+                blob.download_to_filename(
+                    temp_file
+                )
 
-                zipf.write(temp_file, arcname=blob.name)
+                # IMPORTANT
+                zipf.write(
 
-                if os.path.exists(temp_file):
-                    os.remove(temp_file)
+                    temp_file,
+
+                    arcname=blob.name.replace(
+                        f"{user_id}/",
+                        ""
+                    )
+                )
+
+                if os.path.exists(
+                    temp_file
+                ):
+
+                    os.remove(
+                        temp_file
+                    )
 
         # ====================================
         # UPLOAD ZIP
         # ====================================
-        zip_storage_path = f"downloads/{zip_filename}"
 
-        zip_blob = bucket.blob(zip_storage_path)
-        zip_blob.upload_from_filename(zip_temp_path, content_type="application/zip")
+        zip_storage_path = (
+
+            f"{user_id}/downloads/"
+            f"{zip_filename}"
+        )
+
+        zip_blob = bucket.blob(
+            zip_storage_path
+        )
+
+        zip_blob.upload_from_filename(
+
+            zip_temp_path,
+
+            content_type="application/zip"
+        )
+
         zip_blob.make_public()
 
         zip_url = zip_blob.public_url
 
         # ====================================
-        # CLEAN
+        # DELETE TEMP
         # ====================================
-        if os.path.exists(zip_temp_path):
-            os.remove(zip_temp_path)
+
+        if os.path.exists(
+            zip_temp_path
+        ):
+
+            os.remove(
+                zip_temp_path
+            )
 
         # ====================================
         # REPLY
         # ====================================
+
         reply_message(
+
             reply_token,
+
             f"DOWNLOAD READY\n\n"
+
             f"PROJECT: {project_name}\n"
+
             f"MODE: {label_name}\n"
+
             f"FILES: {len(blobs)}\n\n"
+
             f"{zip_url}"
         )
 
-        return jsonify({"status": "success"})
+        return jsonify({
+            "status": "success"
+        })
 
     except Exception as e:
 
         traceback.print_exc()
 
         reply_message(
-            event.get("replyToken"),
-            f"DOWNLOAD ERROR\n{str(e)}"
+
+            event.get(
+                "replyToken"
+            ),
+
+            f"DOWNLOAD ERROR\n\n{str(e)}"
         )
 
         return jsonify({
-            "status": "error",
-            "message": str(e)
-        }), 500      
+
+            "status":
+                "error",
+
+            "message":
+                str(e)
+
+        }), 500   
 # =========================================================
 def handle_image(event):
 
