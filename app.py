@@ -155,16 +155,109 @@ LINE_HEADERS = {
         "application/json"
 }
 
+
 # =========================================================
-# HEARTBEAT LOOP กระตุ้กไปที่ HUB  ให้รู้ว่ายังonline อยู่
+# REQUEST START
+# =========================================================
+@app.before_request
+def before_request():
+
+    global active_requests
+    global total_requests
+    global last_request_time
+
+    active_requests += 1
+
+    total_requests += 1
+
+    last_request_time = int(time.time())
+
+    g.start_time = time.time()
+# =========================================================
+# REQUEST END
+# =========================================================
+@app.after_request
+def after_request(response):
+
+    global active_requests
+
+    active_requests -= 1
+
+    if active_requests < 0:
+        active_requests = 0
+
+    process_time = time.time() - g.start_time
+
+    print(
+        f"REQUEST TIME = {process_time:.2f}s"
+    )
+
+    return response  
+# =========================================================
+# SERVER LOAD STATUS
+# =========================================================
+# ปกติ -> active_requests = 0-3
+# เริ่มหนัก->active_requests = 5-10
+# ขวดหนัก ->active_requests > 15
+# =========================================================
+# SERVER STATS
+# =========================================================
+from flask import g
+active_requests = 0
+
+total_requests = 0
+
+last_request_time = 0
+
+average_response_time = 0
+# =========================================================
+# HEARTBEAT LOOP
 # =========================================================
 def heartbeat_loop():
+
+    global active_requests
+    global total_requests
+    global last_request_time
+    global average_response_time
 
     print("🔥 HEARTBEAT LOOP STARTED")
 
     while True:
 
         try:
+
+            # ====================================
+            # HEALTH STATUS
+            # ====================================
+
+            if active_requests >= 20:
+
+                health = "overload"
+
+            elif active_requests >= 10:
+
+                health = "busy"
+
+            elif active_requests >= 5:
+
+                health = "warning"
+
+            else:
+
+                health = "normal"
+
+            # ====================================
+            # LOAD SCORE
+            # ====================================
+
+            load_score = (
+
+                active_requests * 10
+            )
+
+            # ====================================
+            # SAVE DATA
+            # ====================================
 
             save_data = {
 
@@ -174,8 +267,38 @@ def heartbeat_loop():
                 "status":
                     "online",
 
+                # -----------------------------
+                # LOAD
+                # -----------------------------
+
                 "load_score":
-                    0,
+                    load_score,
+
+                "health":
+                    health,
+
+                # -----------------------------
+                # REQUEST STATS
+                # -----------------------------
+
+                "active_requests":
+                    active_requests,
+
+                "total_requests":
+                    total_requests,
+
+                "last_request_time":
+                    last_request_time,
+
+                "avg_response_time":
+                    round(
+                        average_response_time,
+                        2
+                    ),
+
+                # -----------------------------
+                # SERVER INFO
+                # -----------------------------
 
                 "cloud_url":
                     WORKER_WEBHOOK_URL,
@@ -184,21 +307,64 @@ def heartbeat_loop():
                     int(time.time())
             }
 
+            # ====================================
+            # SAVE FIRESTORE
+            # ====================================
+
             hub_db.collection("hub_system") \
                 .document("server_pool") \
                 .collection("servers") \
                 .document(SERVER_ID) \
                 .set(save_data, merge=True)
 
+            # ====================================
+            # LOG
+            # ====================================
+
+            print("=" * 50)
+
             print("✅ HEARTBEAT OK")
 
-        except Exception as e:
+            print("SERVER =", SERVER_ID)
+
+            print("HEALTH =", health)
+
+            print(
+                "ACTIVE REQUESTS =",
+                active_requests
+            )
+
+            print(
+                "TOTAL REQUESTS =",
+                total_requests
+            )
+
+            print(
+                "AVG RESPONSE =",
+                round(
+                    average_response_time,
+                    2
+                ),
+                "sec"
+            )
+
+            print(
+                "LOAD SCORE =",
+                load_score
+            )
+
+            print("=" * 50)
+
+        except Exception:
 
             print("❌ HEARTBEAT ERROR")
 
             traceback.print_exc()
 
+        # ====================================
         # LOOP EVERY 30 SEC
+        # ====================================
+
         time.sleep(30)
 
 # =========================================================
