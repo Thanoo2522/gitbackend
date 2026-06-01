@@ -20,250 +20,12 @@ import base64
 import zipfile
 #------------- เกี่ยวกับ AI Model
 import numpy as np
-import tensorflow as tf
+import pytz
 # =========================================================
 # FLASK
 # =========================================================
 app = Flask(__name__)
 
-# =========================================================
-# =========================================================
-# MODELS
-# =========================================================
-
-models = {}
-
-# =========================================================
-# LABELS
-# =========================================================
-
-labels = {
-
-    "imagenumber": [
-
-        "1",
-        "2"
-    ]
-}
-
-print("LABELS LOADED")
-
-# =========================================================
-# LOAD MODEL (LAZY LOAD)
-# =========================================================
-
-def get_model(project):
-
-    # ====================================
-    # MODEL ALREADY LOADED
-    # ====================================
-
-    if project in models:
-
-        print(f"{project} model already loaded")
-
-        return models[project]
-
-    # ====================================
-    # LOAD NEW MODEL
-    # ====================================
-
-    print("=" * 50)
-    print(f"LOADING MODEL : {project}")
-    print("=" * 50)
-
-    model_path = f"models/{project}.h5"
-
-    print("MODEL PATH =", model_path)
-
-    # ====================================
-    # CHECK FILE
-    # ====================================
-
-    if not os.path.exists(model_path):
-
-        raise Exception(
-            f"Model file not found : {model_path}"
-        )
-
-    # ====================================
-    # LOAD MODEL
-    # ====================================
-
-    model = tf.keras.models.load_model(
-        model_path
-    )
-
-    models[project] = model
-
-    print(f"{project} model loaded success")
-
-    return model
-
-# =========================================================
-# PREDICT
-# =========================================================
-
-@app.route("/predict", methods=["POST"])
-def predict():
-
-    try:
-
-        # ====================================
-        # CHECK IMAGE
-        # ====================================
-
-        if "image" not in request.files:
-
-            return jsonify({
-
-                "status":
-                    "error",
-
-                "message":
-                    "No image uploaded"
-
-            }), 400
-
-        # ====================================
-        # GET DATA
-        # ====================================
-
-        file = request.files["image"]
-
-        project = request.form.get(
-            "project"
-        )
-
-        print("=" * 50)
-        print("PREDICT REQUEST")
-        print("=" * 50)
-
-        print(
-            "PROJECT =",
-            project
-        )
-
-        # ====================================
-        # CHECK PROJECT
-        # ====================================
-
-        if not project:
-
-            return jsonify({
-
-                "status":
-                    "error",
-
-                "message":
-                    "Project is required"
-
-            }), 400
-
-        # ====================================
-        # CHECK LABELS
-        # ====================================
-
-        if project not in labels:
-
-            return jsonify({
-
-                "status":
-                    "error",
-
-                "message":
-                    f"Unknown project : {project}"
-
-            }), 400
-
-        # ====================================
-        # LOAD MODEL
-        # ====================================
-
-        model = get_model(project)
-
-        class_names = labels[project]
-
-        # ====================================
-        # IMAGE PROCESS
-        # ====================================
-
-        image = Image.open(
-            file.stream
-        )
-
-        image = image.convert("RGB")
-
-        image = image.resize(
-            (224, 224)
-        )
-
-        img_array = np.array(image)
-
-        img_array = img_array / 255.0
-
-        img_array = np.expand_dims(
-
-            img_array,
-
-            axis=0
-        )
-
-        print("IMAGE READY")
-
-        # ====================================
-        # PREDICT
-        # ====================================
-
-        prediction = model.predict(
-            img_array
-        )
-
-        index = np.argmax(
-            prediction
-        )
-
-        confidence = float(
-            prediction[0][index]
-        )
-
-        label = class_names[index]
-
-        print(
-            "RESULT =",
-            label,
-            confidence
-        )
-
-        # ====================================
-        # RESPONSE
-        # ====================================
-
-        return jsonify({
-
-            "status":
-                "success",
-
-            "label":
-                label,
-
-            "confidence":
-                confidence
-        })
-
-    except Exception as e:
-
-        traceback.print_exc()
-
-        return jsonify({
-
-            "status":
-                "error",
-
-            "message":
-                str(e)
-
-        }), 500
 # =========================================================
 # HEARTBEAT STATE
 # =========================================================
@@ -981,157 +743,325 @@ def main_route():
 
         }), 500
 # =========================================================
-
-# =========================================================
-# DOWNLOAD DATASET
-# download imagecolor red
-# =========================================================
 def download_dataset(event, parts):
 
     try:
 
-        reply_token = event.get("replyToken")
+        reply_token = event.get(
+            "replyToken"
+        )
+
+        user_id = event.get(
+            "source",
+            {}
+        ).get(
+            "userId"
+        )
 
         # ====================================
-        # VALIDATE MIN
+        # VALIDATE
         # ====================================
+
         if len(parts) < 2:
 
             reply_message(
+
                 reply_token,
-                "รูปแบบ:\n"
+
+                "รูปแบบ:\n\n"
                 "download imagenumber\n"
-                "หรือ\n"
-                "download imagecolor red"
+                "download imagenumber 1\n"
+                "download plant rust"
             )
 
-            return jsonify({"status": "error"})
+            return jsonify({
+                "status": "error"
+            })
 
         # ====================================
-        # PROJECT
-        # ====================================
-        project_name = parts[1].lower()
-
-        # ====================================
-        # MODE SELECTION
+        # REMOVE download
         # ====================================
 
-        # -----------------------------
-        # MODE A: download whole project
-        # -----------------------------
-        if len(parts) == 2:
+        path_parts = parts[1:]
 
-            print("MODE = FULL PROJECT DOWNLOAD")
+        # ====================================
+        # STORAGE PREFIX
+        # ====================================
 
-            storage_prefix = f"{project_name}/"
+        storage_prefix = (
 
-            label_name = "ALL"
+            f"{user_id}/"
+            + "/".join(path_parts)
+            + "/"
+        )
 
-        # -----------------------------
-        # MODE B: download specific label
-        # -----------------------------
-        else:
-
-            label_name = parts[2].lower()
-
-            print("MODE = SINGLE LABEL DOWNLOAD")
-
-            storage_prefix = f"{project_name}/{label_name}/"
-
+        print("=" * 50)
+        print("DOWNLOAD DATASET")
+        print("USER =", user_id)
         print("PREFIX =", storage_prefix)
+        print("=" * 50)
 
         # ====================================
         # GET FILES
         # ====================================
-        blobs = list(bucket.list_blobs(prefix=storage_prefix))
 
-        if len(blobs) == 0:
+        blobs = list(
 
-            reply_message(
-                reply_token,
-                "ไม่พบ dataset"
+            bucket.list_blobs(
+                prefix=storage_prefix
             )
+        )
 
-            return jsonify({"status": "error"})
+        # FILTER FOLDER
+        blobs = [
+
+            b for b in blobs
+            if not b.name.endswith("/")
+        ]
 
         print("TOTAL FILES =", len(blobs))
 
         # ====================================
-        # ZIP NAME
+        # EMPTY
         # ====================================
-        zip_filename = (
-            f"{project_name}_{label_name}.zip"
+
+        if len(blobs) == 0:
+
+            reply_message(
+
+                reply_token,
+
+                "ไม่พบ dataset\n\n"
+                f"{storage_prefix}"
+            )
+
+            return jsonify({
+                "status": "error"
+            })
+
+        # ====================================
+        # SAFE ZIP NAME
+        # ====================================
+
+        safe_name = "_".join(
+            path_parts
         )
 
-        zip_temp_path = f"/tmp/{zip_filename}"
+        # ====================================
+        # THAI TIMESTAMP
+        # ====================================
+
+        thai_tz = pytz.timezone(
+            "Asia/Bangkok"
+        )
+
+        thai_now = datetime.now(
+            thai_tz
+        )
+
+        timestamp = thai_now.strftime(
+            "%Y%m%d_%H%M%S"
+        )
+
+        # ====================================
+        # ZIP FILE NAME
+        # ====================================
+
+        zip_filename = (
+
+            f"{safe_name}_"
+            f"{timestamp}.zip"
+        )
+
+        zip_temp_path = (
+            f"/tmp/{zip_filename}"
+        )
 
         # ====================================
         # CREATE ZIP
         # ====================================
-        with zipfile.ZipFile(zip_temp_path, "w", zipfile.ZIP_DEFLATED) as zipf:
+
+        with zipfile.ZipFile(
+
+            zip_temp_path,
+
+            "w",
+
+            zipfile.ZIP_DEFLATED
+
+        ) as zipf:
 
             for blob in blobs:
 
-                filename = os.path.basename(blob.name)
+                try:
 
-                if not filename:
-                    continue
+                    filename = os.path.basename(
+                        blob.name
+                    )
 
-                temp_file = f"/tmp/{filename}"
+                    if not filename:
+                        continue
 
-                blob.download_to_filename(temp_file)
+                    temp_file = (
+                        f"/tmp/{filename}"
+                    )
 
-                zipf.write(temp_file, arcname=blob.name)
+                    # DOWNLOAD
+                    blob.download_to_filename(
+                        temp_file
+                    )
 
-                if os.path.exists(temp_file):
-                    os.remove(temp_file)
+                    # KEEP STRUCTURE
+                    zipf.write(
+
+                        temp_file,
+
+                        arcname=blob.name.replace(
+                            f"{user_id}/",
+                            ""
+                        )
+                    )
+
+                    # DELETE TEMP
+                    if os.path.exists(
+                        temp_file
+                    ):
+
+                        os.remove(
+                            temp_file
+                        )
+
+                except Exception:
+
+                    traceback.print_exc()
+
+        # ====================================
+        # STORAGE PATH
+        # ====================================
+
+        zip_storage_path = (
+
+            f"{user_id}/"
+            f"downloads/"
+            f"{zip_filename}"
+        )
+
+        print(
+            "ZIP STORAGE =",
+            zip_storage_path
+        )
 
         # ====================================
         # UPLOAD ZIP
         # ====================================
-        zip_storage_path = f"downloads/{zip_filename}"
 
-        zip_blob = bucket.blob(zip_storage_path)
-        zip_blob.upload_from_filename(zip_temp_path, content_type="application/zip")
+        zip_blob = bucket.blob(
+            zip_storage_path
+        )
+
+        zip_blob.upload_from_filename(
+
+            zip_temp_path,
+
+            content_type="application/zip"
+        )
+
+        # IMPORTANT
         zip_blob.make_public()
 
         zip_url = zip_blob.public_url
 
+        print("ZIP URL =", zip_url)
+
         # ====================================
-        # CLEAN
+        # DELETE TEMP ZIP
         # ====================================
-        if os.path.exists(zip_temp_path):
-            os.remove(zip_temp_path)
+
+        if os.path.exists(
+            zip_temp_path
+        ):
+
+            os.remove(
+                zip_temp_path
+            )
+
+        # ====================================
+        # COUNT DOWNLOADS
+        # ====================================
+
+        download_blobs = list(
+
+            bucket.list_blobs(
+
+                prefix=(
+                    f"{user_id}/downloads/"
+                )
+            )
+        )
+
+        download_blobs = [
+
+            b for b in download_blobs
+            if not b.name.endswith("/")
+        ]
+
+        total_downloads = len(
+            download_blobs
+        )
+
+        print(
+            "TOTAL DOWNLOADS =",
+            total_downloads
+        )
 
         # ====================================
         # REPLY
         # ====================================
+
         reply_message(
+
             reply_token,
+
             f"DOWNLOAD READY\n\n"
-            f"PROJECT: {project_name}\n"
-            f"MODE: {label_name}\n"
-            f"FILES: {len(blobs)}\n\n"
+
+            f"PATH:\n"
+            f"{storage_prefix}\n\n"
+
+            f"FILES: {len(blobs)}\n"
+
+            f"DOWNLOAD COUNT: "
+            f"{total_downloads}\n\n"
+
             f"{zip_url}"
         )
 
-        return jsonify({"status": "success"})
+        return jsonify({
+            "status": "success"
+        })
 
     except Exception as e:
 
         traceback.print_exc()
 
         reply_message(
-            event.get("replyToken"),
-            f"DOWNLOAD ERROR\n{str(e)}"
+
+            event.get(
+                "replyToken"
+            ),
+
+            f"DOWNLOAD ERROR\n\n{str(e)}"
         )
 
         return jsonify({
-            "status": "error",
-            "message": str(e)
-        }), 500      
-# =========================================================
-# HANDLE IMAGE
+
+            "status":
+                "error",
+
+            "message":
+                str(e)
+
+        }), 500
+
 # =========================================================
 # HANDLE IMAGE
 # =========================================================
