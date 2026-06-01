@@ -1,4 +1,6 @@
+#from click import command
 from flask import Flask, request, jsonify
+from flask import render_template
 
 import os
 import json
@@ -10,20 +12,258 @@ import threading
 from datetime import datetime
 
 import firebase_admin
-from firebase_admin import credentials, firestore,storage
-
-
+from firebase_admin import credentials, firestore, storage
 from PIL import Image
 from io import BytesIO
 import uuid
 import base64
 import zipfile
-import pytz
+#------------- เกี่ยวกับ AI Model
+import numpy as np
+import tensorflow as tf
 # =========================================================
 # FLASK
 # =========================================================
 app = Flask(__name__)
 
+# =========================================================
+# =========================================================
+# MODELS
+# =========================================================
+
+models = {}
+
+# =========================================================
+# LABELS
+# =========================================================
+
+labels = {
+
+    "imagenumber": [
+
+        "1",
+        "2"
+    ]
+}
+
+print("LABELS LOADED")
+
+# =========================================================
+# LOAD MODEL (LAZY LOAD)
+# =========================================================
+
+def get_model(project):
+
+    # ====================================
+    # MODEL ALREADY LOADED
+    # ====================================
+
+    if project in models:
+
+        print(f"{project} model already loaded")
+
+        return models[project]
+
+    # ====================================
+    # LOAD NEW MODEL
+    # ====================================
+
+    print("=" * 50)
+    print(f"LOADING MODEL : {project}")
+    print("=" * 50)
+
+    model_path = f"models/{project}.h5"
+
+    print("MODEL PATH =", model_path)
+
+    # ====================================
+    # CHECK FILE
+    # ====================================
+
+    if not os.path.exists(model_path):
+
+        raise Exception(
+            f"Model file not found : {model_path}"
+        )
+
+    # ====================================
+    # LOAD MODEL
+    # ====================================
+
+    model = tf.keras.models.load_model(
+        model_path
+    )
+
+    models[project] = model
+
+    print(f"{project} model loaded success")
+
+    return model
+
+# =========================================================
+# PREDICT
+# =========================================================
+
+@app.route("/predict", methods=["POST"])
+def predict():
+
+    try:
+
+        # ====================================
+        # CHECK IMAGE
+        # ====================================
+
+        if "image" not in request.files:
+
+            return jsonify({
+
+                "status":
+                    "error",
+
+                "message":
+                    "No image uploaded"
+
+            }), 400
+
+        # ====================================
+        # GET DATA
+        # ====================================
+
+        file = request.files["image"]
+
+        project = request.form.get(
+            "project"
+        )
+
+        print("=" * 50)
+        print("PREDICT REQUEST")
+        print("=" * 50)
+
+        print(
+            "PROJECT =",
+            project
+        )
+
+        # ====================================
+        # CHECK PROJECT
+        # ====================================
+
+        if not project:
+
+            return jsonify({
+
+                "status":
+                    "error",
+
+                "message":
+                    "Project is required"
+
+            }), 400
+
+        # ====================================
+        # CHECK LABELS
+        # ====================================
+
+        if project not in labels:
+
+            return jsonify({
+
+                "status":
+                    "error",
+
+                "message":
+                    f"Unknown project : {project}"
+
+            }), 400
+
+        # ====================================
+        # LOAD MODEL
+        # ====================================
+
+        model = get_model(project)
+
+        class_names = labels[project]
+
+        # ====================================
+        # IMAGE PROCESS
+        # ====================================
+
+        image = Image.open(
+            file.stream
+        )
+
+        image = image.convert("RGB")
+
+        image = image.resize(
+            (224, 224)
+        )
+
+        img_array = np.array(image)
+
+        img_array = img_array / 255.0
+
+        img_array = np.expand_dims(
+
+            img_array,
+
+            axis=0
+        )
+
+        print("IMAGE READY")
+
+        # ====================================
+        # PREDICT
+        # ====================================
+
+        prediction = model.predict(
+            img_array
+        )
+
+        index = np.argmax(
+            prediction
+        )
+
+        confidence = float(
+            prediction[0][index]
+        )
+
+        label = class_names[index]
+
+        print(
+            "RESULT =",
+            label,
+            confidence
+        )
+
+        # ====================================
+        # RESPONSE
+        # ====================================
+
+        return jsonify({
+
+            "status":
+                "success",
+
+            "label":
+                label,
+
+            "confidence":
+                confidence
+        })
+
+    except Exception as e:
+
+        traceback.print_exc()
+
+        return jsonify({
+
+            "status":
+                "error",
+
+            "message":
+                str(e)
+
+        }), 500
 # =========================================================
 # HEARTBEAT STATE
 # =========================================================
@@ -52,6 +292,8 @@ WORKER_WEBHOOK_URL = os.environ.get(
     "WORKER_WEBHOOK_URL"
 )
 
+LIFF_ID = os.environ.get("LIFF_ID")
+
 # =========================================================
 # VALIDATION
 # =========================================================
@@ -70,7 +312,8 @@ required_env = {
         SERVER_ID,
 
     "WORKER_WEBHOOK_URL":
-        WORKER_WEBHOOK_URL
+        WORKER_WEBHOOK_URL,
+    "LIFF_ID": LIFF_ID   
 }
 
 for k, v in required_env.items():
@@ -81,30 +324,49 @@ for k, v in required_env.items():
 # =========================================================
 # FIREBASE
 # =========================================================
+# FIREBASE
+# =========================================================
 
+# ---------------------------------------------------------
 # HUB DB
+# ---------------------------------------------------------
 hub_cred = credentials.Certificate(
     json.loads(HUB_FIREBASE_KEY)
 )
 
 hub_app = firebase_admin.initialize_app(
+
     hub_cred,
+
     name="hub"
 )
 
-hub_db = firestore.client(hub_app)
+hub_db = firestore.client(
+    hub_app
+)
 
-# WORKER DB
+# ---------------------------------------------------------
+# WORKER DB + STORAGE
+# ---------------------------------------------------------
 worker_cred = credentials.Certificate(
     json.loads(WORKER_FIREBASE_KEY)
 )
 
 worker_app = firebase_admin.initialize_app(
+
     worker_cred,
+
+    {
+        "storageBucket":
+            "basework-51f3b.firebasestorage.app"
+    },
+
     name="worker"
 )
 
-worker_db = firestore.client(worker_app)
+worker_db = firestore.client(
+    worker_app
+)
 
 # IMPORTANT
 bucket = storage.bucket(
@@ -132,7 +394,7 @@ LINE_HEADERS = {
 }
 
 # =========================================================
-# HEARTBEAT LOOP
+# HEARTBEAT LOOP กระตุ้กไปที่ HUB  ให้รู้ว่ายังonline อยู่
 # =========================================================
 def heartbeat_loop():
 
@@ -367,7 +629,7 @@ def reply_message(reply_token, text):
     except Exception as e:
 
         print("reply error:", e)
-
+#=====================================
 def push_message(user_id, text):
 
     try:
@@ -719,326 +981,157 @@ def main_route():
 
         }), 500
 # =========================================================
+
+# =========================================================
 # DOWNLOAD DATASET
+# download imagecolor red
 # =========================================================
 def download_dataset(event, parts):
 
     try:
 
-        reply_token = event.get(
-            "replyToken"
-        )
-
-        user_id = event.get(
-            "source",
-            {}
-        ).get(
-            "userId"
-        )
+        reply_token = event.get("replyToken")
 
         # ====================================
-        # VALIDATE
+        # VALIDATE MIN
         # ====================================
-
         if len(parts) < 2:
 
             reply_message(
-
                 reply_token,
-
-                "รูปแบบ:\n\n"
+                "รูปแบบ:\n"
                 "download imagenumber\n"
-                "download imagenumber 1\n"
-                "download plant rust"
+                "หรือ\n"
+                "download imagecolor red"
             )
 
-            return jsonify({
-                "status": "error"
-            })
+            return jsonify({"status": "error"})
 
         # ====================================
-        # REMOVE download
+        # PROJECT
+        # ====================================
+        project_name = parts[1].lower()
+
+        # ====================================
+        # MODE SELECTION
         # ====================================
 
-        path_parts = parts[1:]
+        # -----------------------------
+        # MODE A: download whole project
+        # -----------------------------
+        if len(parts) == 2:
 
-        # ====================================
-        # STORAGE PREFIX
-        # ====================================
+            print("MODE = FULL PROJECT DOWNLOAD")
 
-        storage_prefix = (
+            storage_prefix = f"{project_name}/"
 
-            f"{user_id}/"
-            + "/".join(path_parts)
-            + "/"
-        )
+            label_name = "ALL"
 
-        print("=" * 50)
-        print("DOWNLOAD DATASET")
-        print("USER =", user_id)
+        # -----------------------------
+        # MODE B: download specific label
+        # -----------------------------
+        else:
+
+            label_name = parts[2].lower()
+
+            print("MODE = SINGLE LABEL DOWNLOAD")
+
+            storage_prefix = f"{project_name}/{label_name}/"
+
         print("PREFIX =", storage_prefix)
-        print("=" * 50)
 
         # ====================================
         # GET FILES
         # ====================================
-
-        blobs = list(
-
-            bucket.list_blobs(
-                prefix=storage_prefix
-            )
-        )
-
-        # FILTER FOLDER
-        blobs = [
-
-            b for b in blobs
-            if not b.name.endswith("/")
-        ]
-
-        print("TOTAL FILES =", len(blobs))
-
-        # ====================================
-        # EMPTY
-        # ====================================
+        blobs = list(bucket.list_blobs(prefix=storage_prefix))
 
         if len(blobs) == 0:
 
             reply_message(
-
                 reply_token,
-
-                "ไม่พบ dataset\n\n"
-                f"{storage_prefix}"
+                "ไม่พบ dataset"
             )
 
-            return jsonify({
-                "status": "error"
-            })
+            return jsonify({"status": "error"})
+
+        print("TOTAL FILES =", len(blobs))
 
         # ====================================
-        # SAFE ZIP NAME
+        # ZIP NAME
         # ====================================
-
-        safe_name = "_".join(
-            path_parts
-        )
-
-        # ====================================
-        # THAI TIMESTAMP
-        # ====================================
-
-        thai_tz = pytz.timezone(
-            "Asia/Bangkok"
-        )
-
-        thai_now = datetime.now(
-            thai_tz
-        )
-
-        timestamp = thai_now.strftime(
-            "%Y%m%d_%H%M%S"
-        )
-
-        # ====================================
-        # ZIP FILE NAME
-        # ====================================
-
         zip_filename = (
-
-            f"{safe_name}_"
-            f"{timestamp}.zip"
+            f"{project_name}_{label_name}.zip"
         )
 
-        zip_temp_path = (
-            f"/tmp/{zip_filename}"
-        )
+        zip_temp_path = f"/tmp/{zip_filename}"
 
         # ====================================
         # CREATE ZIP
         # ====================================
-
-        with zipfile.ZipFile(
-
-            zip_temp_path,
-
-            "w",
-
-            zipfile.ZIP_DEFLATED
-
-        ) as zipf:
+        with zipfile.ZipFile(zip_temp_path, "w", zipfile.ZIP_DEFLATED) as zipf:
 
             for blob in blobs:
 
-                try:
+                filename = os.path.basename(blob.name)
 
-                    filename = os.path.basename(
-                        blob.name
-                    )
+                if not filename:
+                    continue
 
-                    if not filename:
-                        continue
+                temp_file = f"/tmp/{filename}"
 
-                    temp_file = (
-                        f"/tmp/{filename}"
-                    )
+                blob.download_to_filename(temp_file)
 
-                    # DOWNLOAD
-                    blob.download_to_filename(
-                        temp_file
-                    )
+                zipf.write(temp_file, arcname=blob.name)
 
-                    # KEEP STRUCTURE
-                    zipf.write(
-
-                        temp_file,
-
-                        arcname=blob.name.replace(
-                            f"{user_id}/",
-                            ""
-                        )
-                    )
-
-                    # DELETE TEMP
-                    if os.path.exists(
-                        temp_file
-                    ):
-
-                        os.remove(
-                            temp_file
-                        )
-
-                except Exception:
-
-                    traceback.print_exc()
-
-        # ====================================
-        # STORAGE PATH
-        # ====================================
-
-        zip_storage_path = (
-
-            f"{user_id}/"
-            f"downloads/"
-            f"{zip_filename}"
-        )
-
-        print(
-            "ZIP STORAGE =",
-            zip_storage_path
-        )
+                if os.path.exists(temp_file):
+                    os.remove(temp_file)
 
         # ====================================
         # UPLOAD ZIP
         # ====================================
+        zip_storage_path = f"downloads/{zip_filename}"
 
-        zip_blob = bucket.blob(
-            zip_storage_path
-        )
-
-        zip_blob.upload_from_filename(
-
-            zip_temp_path,
-
-            content_type="application/zip"
-        )
-
-        # IMPORTANT
+        zip_blob = bucket.blob(zip_storage_path)
+        zip_blob.upload_from_filename(zip_temp_path, content_type="application/zip")
         zip_blob.make_public()
 
         zip_url = zip_blob.public_url
 
-        print("ZIP URL =", zip_url)
-
         # ====================================
-        # DELETE TEMP ZIP
+        # CLEAN
         # ====================================
-
-        if os.path.exists(
-            zip_temp_path
-        ):
-
-            os.remove(
-                zip_temp_path
-            )
-
-        # ====================================
-        # COUNT DOWNLOADS
-        # ====================================
-
-        download_blobs = list(
-
-            bucket.list_blobs(
-
-                prefix=(
-                    f"{user_id}/downloads/"
-                )
-            )
-        )
-
-        download_blobs = [
-
-            b for b in download_blobs
-            if not b.name.endswith("/")
-        ]
-
-        total_downloads = len(
-            download_blobs
-        )
-
-        print(
-            "TOTAL DOWNLOADS =",
-            total_downloads
-        )
+        if os.path.exists(zip_temp_path):
+            os.remove(zip_temp_path)
 
         # ====================================
         # REPLY
         # ====================================
-
         reply_message(
-
             reply_token,
-
             f"DOWNLOAD READY\n\n"
-
-            f"PATH:\n"
-            f"{storage_prefix}\n\n"
-
-            f"FILES: {len(blobs)}\n"
-
-            f"DOWNLOAD COUNT: "
-            f"{total_downloads}\n\n"
-
+            f"PROJECT: {project_name}\n"
+            f"MODE: {label_name}\n"
+            f"FILES: {len(blobs)}\n\n"
             f"{zip_url}"
         )
 
-        return jsonify({
-            "status": "success"
-        })
+        return jsonify({"status": "success"})
 
     except Exception as e:
 
         traceback.print_exc()
 
         reply_message(
-
-            event.get(
-                "replyToken"
-            ),
-
-            f"DOWNLOAD ERROR\n\n{str(e)}"
+            event.get("replyToken"),
+            f"DOWNLOAD ERROR\n{str(e)}"
         )
 
         return jsonify({
-
-            "status":
-                "error",
-
-            "message":
-                str(e)
-
-        }), 500
+            "status": "error",
+            "message": str(e)
+        }), 500      
+# =========================================================
+# HANDLE IMAGE
 # =========================================================
 # HANDLE IMAGE
 # =========================================================
@@ -1069,14 +1162,8 @@ def handle_image(event):
         # ====================================
 
         session_doc = worker_db.collection(
-            "user"
-        ).document(
-            user_id
-        ).collection(
             "dataset_session"
-        ).document(
-            user_id
-        ).get()
+        ).document(user_id).get()
 
         if not session_doc.exists:
 
@@ -1085,7 +1172,7 @@ def handle_image(event):
                 reply_token,
 
                 "กรุณาพิมพ์:\n"
-                "project/class/224x224"
+                "imagecolor red"
             )
 
             return jsonify({
@@ -1102,45 +1189,23 @@ def handle_image(event):
             "label"
         )
 
-        resize_width = int(
-
-            session_data.get(
-                "resize_width",
-                224
-            )
-        )
-
-        resize_height = int(
-
-            session_data.get(
-                "resize_height",
-                224
-            )
-        )
-
         print("PROJECT =", project_name)
         print("LABEL =", label_name)
-
-        print(
-            "SIZE =",
-            resize_width,
-            resize_height
-        )
 
         # ====================================
         # GET IMAGE FROM LINE
         # ====================================
 
-        message_id = message.get(
-            "id"
-        )
+        message_id = message.get("id")
+
+        print("MESSAGE ID =", message_id)
 
         image_url = (
             "https://api-data.line.me/v2/bot/message/"
             f"{message_id}/content"
         )
 
-        print("DOWNLOAD IMAGE")
+        print("DOWNLOAD IMAGE FROM LINE")
 
         r = requests.get(
 
@@ -1155,12 +1220,11 @@ def handle_image(event):
             timeout=30
         )
 
-        print(
-            "LINE STATUS =",
-            r.status_code
-        )
+        print("LINE STATUS =", r.status_code)
 
         if r.status_code != 200:
+
+            print("LINE ERROR =", r.text)
 
             reply_message(
 
@@ -1182,6 +1246,10 @@ def handle_image(event):
             BytesIO(r.content)
         )
 
+        # ====================================
+        # RGB
+        # ====================================
+
         image = image.convert(
             "RGB"
         )
@@ -1191,11 +1259,7 @@ def handle_image(event):
         # ====================================
 
         image = image.resize(
-
-            (
-                resize_width,
-                resize_height
-            )
+            (224, 224)
         )
 
         # ====================================
@@ -1206,6 +1270,10 @@ def handle_image(event):
             str(uuid.uuid4())
             + ".jpg"
         )
+
+        # ====================================
+        # TEMP PATH
+        # ====================================
 
         temp_path = (
             f"/tmp/{filename}"
@@ -1229,7 +1297,6 @@ def handle_image(event):
 
         storage_path = (
 
-            f"{user_id}/"
             f"{project_name}/"
             f"{label_name}/"
             f"{filename}"
@@ -1263,38 +1330,53 @@ def handle_image(event):
         print(public_url)
 
         # ====================================
-        # COUNT IMAGES FROM STORAGE
+        # SAVE FIRESTORE
         # ====================================
 
-        storage_prefix = (
+        worker_db.collection(
+            project_name
+        ).document(
+            label_name
+        ).collection(
+            "dataset"
+        ).add({
 
-            f"{user_id}/"
-            f"{project_name}/"
-            f"{label_name}/"
-        )
+            "user_id":
+                user_id,
 
-        blobs = list(
+            "project":
+                project_name,
 
-            bucket.list_blobs(
-                prefix=storage_prefix
-            )
-        )
+            "label":
+                label_name,
 
-        # FILTER FOLDER
-        blobs = [
+            "storage_path":
+                storage_path,
 
-            b for b in blobs
-            if not b.name.endswith("/")
-        ]
+            "image_url":
+                public_url,
 
-        total_images = len(
-            blobs
-        )
+            "width":
+                224,
 
-        print(
-            "TOTAL IMAGES =",
-            total_images
-        )
+            "height":
+                224,
+
+            "created_at":
+                datetime.utcnow()
+        })
+
+        print("DATASET SAVED")
+
+         # ====================================
+       # COUNT IMAGES IN CLASS
+       # ====================================
+
+        dataset_docs = worker_db.collection(project_name ).document(label_name ).collection("dataset" ).get()
+
+        total_images = len( dataset_docs )
+
+        print("TOTAL IMAGES =",total_images)
 
         # ====================================
         # DELETE TEMP
@@ -1305,7 +1387,7 @@ def handle_image(event):
         ):
 
             os.remove(
-                temp_path
+                temp_path  
             )
 
         # ====================================
@@ -1314,16 +1396,10 @@ def handle_image(event):
 
         reply_message(
 
-            reply_token,
-
-            f"บันทึกรูปสำเร็จ\n\n"
-            f"PROJECT: {project_name}\n"
-            f"CLASS: {label_name}\n"
-            f"SIZE: "
-            f"{resize_width}x{resize_height}\n"
-            f"TOTAL: {total_images}\n\n"
-            f"ส่งรูปต่อได้"
-        )
+                       reply_token, f"บันทึกรูปสำเร็จ class: {label_name}\n"
+                                    f"จำนวนรูป: {total_images}\n"
+                                    f"ส่งรูปต่อไปใน class: {label_name}"
+                          )
 
         return jsonify({
             "status": "success"
@@ -1344,15 +1420,11 @@ def handle_image(event):
 
         return jsonify({
 
-            "status":
-                "error",
+            "status": "error",
 
-            "message":
-                str(e)
+            "message": str(e)
 
         }), 500
-# =========================================================
-# WORKER WEBHOOK
 # =========================================================
 @app.route("/worker-webhook", methods=["POST"])
 def worker_webhook():
@@ -1499,7 +1571,7 @@ def worker_webhook():
 
             "message": str(e)
 
-        }), 500
+        }), 500 
  
 # =========================================================
 # RUN
