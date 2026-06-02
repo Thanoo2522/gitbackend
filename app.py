@@ -20,6 +20,8 @@ import base64
 import zipfile
 #------------- เกี่ยวกับ AI Model
 import numpy as np
+
+ 
  
 # =========================================================
 # FLASK
@@ -155,6 +157,68 @@ LINE_HEADERS = {
         "application/json"
 }
 
+# =========================================================
+# REPLY FLEX MESSAGE
+# =========================================================
+
+def reply_flex(
+
+    reply_token,
+
+    alt_text,
+
+    flex_contents
+):
+
+    url = "https://api.line.me/v2/bot/message/reply"
+
+    headers = {
+
+        "Content-Type":
+            "application/json",
+
+        "Authorization":
+            f"Bearer {LINE_CHANNEL_ACCESS_TOKEN}"
+    }
+
+    payload = {
+
+        "replyToken":
+            reply_token,
+
+        "messages": [
+
+            {
+
+                "type":
+                    "flex",
+
+                "altText":
+                    alt_text,
+
+                "contents":
+                    flex_contents
+            }
+        ]
+    }
+
+    r = requests.post(
+
+        url,
+
+        headers=headers,
+
+        json=payload,
+
+        timeout=30
+    )
+
+    print(
+        "FLEX STATUS =",
+        r.status_code
+    )
+
+    print(r.text)
 
 # =========================================================
 # REQUEST START
@@ -948,11 +1012,228 @@ def handle_image(event):
                 str(e)
 
         }), 500
-
-
+    
 # =========================================================
-# MAIN ROUTE
+# FLEX PROJECT MONITOR
 # =========================================================
+
+def create_project_monitor_flex(projects_data):
+
+    bubbles = []
+
+    # =====================================================
+    # LIMIT 40 BUBBLES
+    # =====================================================
+
+    projects_data = projects_data[:40]
+
+    for item in projects_data:
+
+        project_name = item.get(
+            "project_name",
+            "-"
+        )
+
+        total_classes = item.get(
+            "total_classes",
+            0
+        )
+
+        total_images = item.get(
+            "total_images",
+            0
+        )
+
+        latest_upload = item.get(
+            "latest_upload",
+            "-"
+        )
+
+        # =================================================
+        # STATUS
+        # =================================================
+
+        if total_images >= 1000:
+
+            status_text = "🟢 READY"
+
+        elif total_images >= 100:
+
+            status_text = "🟡 COLLECTING"
+
+        else:
+
+            status_text = "🔴 LOW DATA"
+
+        # =================================================
+        # BUBBLE
+        # =================================================
+
+        bubble = {
+
+            "type": "bubble",
+
+            "size": "mega",
+
+            "body": {
+
+                "type": "box",
+
+                "layout": "vertical",
+
+                "spacing": "md",
+
+                "contents": [
+
+                    {
+                        "type": "text",
+
+                        "text":
+                            "🤖 AI PROJECT",
+
+                        "size":
+                            "sm",
+
+                        "color":
+                            "#999999"
+                    },
+
+                    {
+                        "type": "text",
+
+                        "text":
+                            project_name,
+
+                        "weight":
+                            "bold",
+
+                        "size":
+                            "xl",
+
+                        "wrap":
+                            True
+                    },
+
+                    {
+                        "type": "separator",
+
+                        "margin":
+                            "md"
+                    },
+
+                    {
+                        "type": "box",
+
+                        "layout": "vertical",
+
+                        "margin":
+                            "md",
+
+                        "spacing":
+                            "sm",
+
+                        "contents": [
+
+                            {
+                                "type": "text",
+
+                                "text":
+                                    f"📦 CLASS: {total_classes}",
+
+                                "size":
+                                    "sm"
+                            },
+
+                            {
+                                "type": "text",
+
+                                "text":
+                                    f"🖼️ IMAGES: {total_images}",
+
+                                "size":
+                                    "sm"
+                            },
+
+                            {
+                                "type": "text",
+
+                                "text":
+                                    status_text,
+
+                                "size":
+                                    "sm",
+
+                                "weight":
+                                    "bold"
+                            },
+
+                            {
+                                "type": "text",
+
+                                "text":
+                                    f"⏱ {latest_upload}",
+
+                                "size":
+                                    "xs",
+
+                                "color":
+                                    "#999999",
+
+                                "wrap":
+                                    True
+                            }
+                        ]
+                    }
+                ]
+            },
+
+            "footer": {
+
+                "type": "box",
+
+                "layout": "vertical",
+
+                "spacing": "sm",
+
+                "contents": [
+
+                    {
+                        "type": "button",
+
+                        "style": "primary",
+
+                        "height": "sm",
+
+                        "action": {
+
+                            "type": "message",
+
+                            "label": "OPEN",
+
+                            "text":
+                                f"project {project_name}"
+                        }
+                    }
+                ]
+            }
+        }
+
+        bubbles.append(
+            bubble
+        )
+
+    # =====================================================
+    # FLEX CAROUSEL
+    # =====================================================
+
+    return {
+
+        "type": "carousel",
+
+        "contents": bubbles
+    }
+
+#============================== main route =====================
 @app.route("/main-route", methods=["POST"])
 def main_route():
 
@@ -994,9 +1275,9 @@ def main_route():
                 "type"
             )
 
-            # =====================================================
-            # TEXT MESSAGE
-            # =====================================================
+            # =================================================
+            # TEXT
+            # =================================================
 
             if message_type == "text":
 
@@ -1015,13 +1296,132 @@ def main_route():
                     "replyToken"
                 )
 
-                print("TEXT =", text)
+                print(
+                    "TEXT =",
+                    text
+                )
 
                 user_ref = worker_db.collection(
                     "user"
                 ).document(
                     user_id
                 )
+
+                # =================================================
+                # PROJECT ALL
+                # =================================================
+
+                if text.lower() == "project all":
+
+                    dataset_ref = user_ref.collection(
+                        "dataset_session"
+                    )
+
+                    project_docs = dataset_ref.stream()
+
+                    projects_data = []
+
+                    total_projects = 0
+
+                    for project_doc in project_docs:
+
+                        total_projects += 1
+
+                        project_name = project_doc.id
+
+                        print(
+                            "PROJECT =",
+                            project_name
+                        )
+
+                        classes_ref = dataset_ref.document(
+                            project_name
+                        ).collection(
+                            "class"
+                        ).stream()
+
+                        total_classes = 0
+                        total_images = 0
+
+                        latest_upload = "-"
+
+                        for class_doc in classes_ref:
+
+                            total_classes += 1
+
+                            class_data = class_doc.to_dict()
+
+                            total_images += class_data.get(
+                                "total_images",
+                                0
+                            )
+
+                            last_upload = class_data.get(
+                                "last_upload"
+                            )
+
+                            if last_upload:
+
+                                latest_upload = str(
+                                    last_upload
+                                )
+
+                        projects_data.append({
+
+                            "project_name":
+                                project_name,
+
+                            "total_classes":
+                                total_classes,
+
+                            "total_images":
+                                total_images,
+
+                            "latest_upload":
+                                latest_upload
+                        })
+
+                    # =============================================
+                    # EMPTY
+                    # =============================================
+
+                    if total_projects == 0:
+
+                        reply_message(
+
+                            reply_token,
+
+                            "ยังไม่มี project"
+                        )
+
+                        return jsonify({
+                            "status": "success"
+                        })
+
+                    # =============================================
+                    # FLEX JSON
+                    # =============================================
+
+                    flex_json = create_project_monitor_flex(
+                        projects_data
+                    )
+
+                    # =============================================
+                    # REPLY FLEX
+                    # =============================================
+
+                    reply_flex(
+
+                        reply_token,
+
+                        "AI PROJECT MONITOR",
+
+                        flex_json
+                    )
+
+                    return jsonify({
+                        "status": "success"
+                    })
 
                 # =====================================================
                 # RESET
@@ -1144,7 +1544,9 @@ def main_route():
                         "project/class/230x230\n\n"
                         "ตัวอย่าง:\n"
                         "imagenumber/5/224x224\n"
-                        "plant/rust/640x480"
+                        "plant/rust/640x480\n\n"
+                        "หรือใช้:\n"
+                        "project all"
                     )
 
                     return jsonify({
@@ -1289,9 +1691,9 @@ def main_route():
                     "status": "success"
                 })
 
-            # =====================================================
+            # =================================================
             # IMAGE
-            # =====================================================
+            # =================================================
 
             elif message_type == "image":
 
@@ -1316,6 +1718,7 @@ def main_route():
                 str(e)
 
         }), 500
+
 #=======================================   
 def download_dataset(event, parts):
 
