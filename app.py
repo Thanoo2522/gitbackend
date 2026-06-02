@@ -587,7 +587,372 @@ def push_message(user_id, text):
     except Exception as e:
 
         print("push error:", e)
-#---------------------------------------------------------
+# =========================================================
+# HANDLE IMAGE
+# =========================================================
+
+def handle_image(event):
+
+    try:
+
+        reply_token = event.get(
+            "replyToken"
+        )
+
+        source = event.get(
+            "source",
+            {}
+        )
+
+        user_id = source.get(
+            "userId"
+        )
+
+        message = event.get(
+            "message",
+            {}
+        )
+
+        # =====================================================
+        # GET ACTIVE SESSION
+        # =====================================================
+
+        active_doc = worker_db.collection(
+            "user"
+        ).document(
+            user_id
+        ).collection(
+            "active_session"
+        ).document(
+            "current"
+        ).get()
+
+        if not active_doc.exists:
+
+            reply_message(
+
+                reply_token,
+
+                "กรุณาพิมพ์:\n"
+                "project/class/224x224"
+            )
+
+            return jsonify({
+                "status": "error"
+            })
+
+        active_data = active_doc.to_dict()
+
+        project_name = active_data.get(
+            "project"
+        )
+
+        class_name = active_data.get(
+            "class"
+        )
+
+        # =====================================================
+        # GET SESSION
+        # =====================================================
+
+        session_doc = worker_db.collection(
+            "user"
+        ).document(
+            user_id
+        ).collection(
+            "dataset_session"
+        ).document(
+            project_name
+        ).collection(
+            "class"
+        ).document(
+            class_name
+        ).get()
+
+        if not session_doc.exists:
+
+            reply_message(
+
+                reply_token,
+
+                "ไม่พบ session"
+            )
+
+            return jsonify({
+                "status": "error"
+            })
+
+        session_data = session_doc.to_dict()
+
+        resize_width = int(
+
+            session_data.get(
+                "resize_width",
+                224
+            )
+        )
+
+        resize_height = int(
+
+            session_data.get(
+                "resize_height",
+                224
+            )
+        )
+
+        print("PROJECT =", project_name)
+        print("CLASS =", class_name)
+
+        print(
+            "SIZE =",
+            resize_width,
+            resize_height
+        )
+
+        # =====================================================
+        # GET IMAGE FROM LINE
+        # =====================================================
+
+        message_id = message.get(
+            "id"
+        )
+
+        image_url = (
+            "https://api-data.line.me/v2/bot/message/"
+            f"{message_id}/content"
+        )
+
+        print("DOWNLOAD IMAGE")
+
+        r = requests.get(
+
+            image_url,
+
+            headers={
+
+                "Authorization":
+                    f"Bearer {LINE_CHANNEL_ACCESS_TOKEN}"
+            },
+
+            timeout=30
+        )
+
+        print(
+            "LINE STATUS =",
+            r.status_code
+        )
+
+        if r.status_code != 200:
+
+            reply_message(
+
+                reply_token,
+
+                f"โหลดรูปไม่สำเร็จ\n"
+                f"STATUS: {r.status_code}"
+            )
+
+            return jsonify({
+                "status": "error"
+            })
+
+        # =====================================================
+        # OPEN IMAGE
+        # =====================================================
+
+        image = Image.open(
+            BytesIO(r.content)
+        )
+
+        image = image.convert(
+            "RGB"
+        )
+
+        # =====================================================
+        # RESIZE
+        # =====================================================
+
+        image = image.resize(
+
+            (
+                resize_width,
+                resize_height
+            )
+        )
+
+        # =====================================================
+        # FILE NAME
+        # =====================================================
+
+        filename = (
+            str(uuid.uuid4())
+            + ".jpg"
+        )
+
+        temp_path = (
+            f"/tmp/{filename}"
+        )
+
+        image.save(
+
+            temp_path,
+
+            format="JPEG"
+        )
+
+        print(
+            "IMAGE SAVED =",
+            temp_path
+        )
+
+        # =====================================================
+        # STORAGE PATH
+        # =====================================================
+
+        storage_path = (
+
+            f"{user_id}/"
+            f"{project_name}/"
+            f"{class_name}/"
+            f"{filename}"
+        )
+
+        print(
+            "STORAGE PATH =",
+            storage_path
+        )
+
+        # =====================================================
+        # UPLOAD STORAGE
+        # =====================================================
+
+        blob = bucket.blob(
+            storage_path
+        )
+
+        blob.upload_from_filename(
+
+            temp_path,
+
+            content_type="image/jpeg"
+        )
+
+        blob.make_public()
+
+        public_url = blob.public_url
+
+        print("UPLOAD SUCCESS")
+        print(public_url)
+
+        # =====================================================
+        # COUNT IMAGES
+        # =====================================================
+
+        storage_prefix = (
+
+            f"{user_id}/"
+            f"{project_name}/"
+            f"{class_name}/"
+        )
+
+        blobs = list(
+
+            bucket.list_blobs(
+                prefix=storage_prefix
+            )
+        )
+
+        blobs = [
+
+            b for b in blobs
+            if not b.name.endswith("/")
+        ]
+
+        total_images = len(
+            blobs
+        )
+
+        print(
+            "TOTAL IMAGES =",
+            total_images
+        )
+
+        # =====================================================
+        # UPDATE SESSION MONITOR
+        # =====================================================
+
+        session_doc.reference.update({
+
+            "total_images":
+                total_images,
+
+            "last_upload":
+                datetime.utcnow(),
+
+            "worker_online":
+                True
+        })
+
+        # =====================================================
+        # DELETE TEMP
+        # =====================================================
+
+        if os.path.exists(
+            temp_path
+        ):
+
+            os.remove(
+                temp_path
+            )
+
+        # =====================================================
+        # REPLY
+        # =====================================================
+
+        reply_message(
+
+            reply_token,
+
+            f"บันทึกรูปสำเร็จ\n\n"
+            f"PROJECT: {project_name}\n"
+            f"CLASS: {class_name}\n"
+            f"SIZE: "
+            f"{resize_width}x{resize_height}\n"
+            f"TOTAL: {total_images}\n\n"
+            f"ส่งรูปต่อได้"
+        )
+
+        return jsonify({
+            "status": "success"
+        })
+
+    except Exception as e:
+
+        traceback.print_exc()
+
+        reply_message(
+
+            event.get(
+                "replyToken"
+            ),
+
+            f"ERROR\n{str(e)}"
+        )
+
+        return jsonify({
+
+            "status":
+                "error",
+
+            "message":
+                str(e)
+
+        }), 500
+
+
+# =========================================================
+# MAIN ROUTE
+# =========================================================
 @app.route("/main-route", methods=["POST"])
 def main_route():
 
@@ -599,11 +964,15 @@ def main_route():
 
         print("=" * 50)
         print("MAIN ROUTE")
+
         print(json.dumps(
+
             body,
+
             indent=2,
             ensure_ascii=False
         ))
+
         print("=" * 50)
 
         events = body.get(
@@ -628,6 +997,7 @@ def main_route():
             # =====================================================
             # TEXT MESSAGE
             # =====================================================
+
             if message_type == "text":
 
                 text = message.get(
@@ -647,69 +1017,91 @@ def main_route():
 
                 print("TEXT =", text)
 
-                # =========================================
-                # USER REF
-                # =========================================
-
                 user_ref = worker_db.collection(
                     "user"
                 ).document(
                     user_id
                 )
 
-                session_ref = user_ref.collection(
-                    "dataset_session"
-                ).document(
-                    user_id
-                )
-
-                # =========================================
-                # DOWNLOAD
-                # =========================================
-
-                if text.lower().startswith(
-                    "download"
-                ):
-
-                    parts = text.split(" ")
-
-                    return download_dataset(
-                        event,
-                        parts
-                    )
-
-                # =========================================
-                # RESET SESSION
-                # =========================================
+                # =====================================================
+                # RESET
+                # =====================================================
 
                 if text.lower() == "reset":
 
-                    session_ref.delete()
+                    active_ref = user_ref.collection(
+                        "active_session"
+                    ).document(
+                        "current"
+                    )
+
+                    active_doc = active_ref.get()
+
+                    if active_doc.exists:
+
+                        active_ref.delete()
 
                     reply_message(
 
                         reply_token,
 
-                        "ล้าง session แล้ว"
+                        "ล้าง active session แล้ว"
                     )
 
                     return jsonify({
                         "status": "success"
                     })
 
-                # =========================================
-                # SHOW SESSION
-                # =================================== 
+                # =====================================================
+                # SESSION
+                # =====================================================
 
                 if text.lower() == "session":
 
-                    session_doc = session_ref.get()
+                    active_doc = user_ref.collection(
+                        "active_session"
+                    ).document(
+                        "current"
+                    ).get()
+
+                    if not active_doc.exists:
+
+                        reply_message(
+
+                            reply_token,
+
+                            "ไม่มี session"
+                        )
+
+                        return jsonify({
+                            "status": "error"
+                        })
+
+                    active_data = active_doc.to_dict()
+
+                    project_name = active_data.get(
+                        "project"
+                    )
+
+                    class_name = active_data.get(
+                        "class"
+                    )
+
+                    session_doc = user_ref.collection(
+                        "dataset_session"
+                    ).document(
+                        project_name
+                    ).collection(
+                        "class"
+                    ).document(
+                        class_name
+                    ).get()
 
                     if not session_doc.exists:
 
                         reply_message(
                             reply_token,
-                            "ไม่มี session"
+                            "ไม่พบ session"
                         )
 
                         return jsonify({
@@ -722,21 +1114,23 @@ def main_route():
 
                         reply_token,
 
-                        f"PROJECT: {data.get('project')}\n"
-                        f"CLASS: {data.get('label')}\n"
+                        f"PROJECT: {project_name}\n"
+                        f"CLASS: {class_name}\n"
                         f"SIZE: "
                         f"{data.get('resize_width')}x"
-                        f"{data.get('resize_height')}"
+                        f"{data.get('resize_height')}\n"
+                        f"TOTAL: "
+                        f"{data.get('total_images',0)}"
                     )
 
                     return jsonify({
                         "status": "success"
                     })
 
-                # =========================================
-                # FORMAT:
-                # project/class/230x230
-                # =========================================
+                # =====================================================
+                # FORMAT
+                # project/class/224x224
+                # =====================================================
 
                 path_parts = text.split("/")
 
@@ -757,25 +1151,13 @@ def main_route():
                         "status": "error"
                     })
 
-                # =========================================
-                # PROJECT
-                # =========================================
-
                 project_name = path_parts[0] \
                     .strip() \
                     .lower()
 
-                # =========================================
-                # CLASS
-                # =============================== 
-
                 class_name = path_parts[1] \
                     .strip() \
                     .lower()
-
-                # =========================================
-                # SIZE
-                # =========================================
 
                 size_text = path_parts[2] \
                     .strip() \
@@ -817,34 +1199,30 @@ def main_route():
                         "status": "error"
                     })
 
-                # =========================================
-                # VALIDATE SIZE
-                # =========================================
+                # =====================================================
+                # SESSION REF
+                # =====================================================
 
-                if resize_width <= 0 \
-                or resize_height <= 0:
+                session_ref = user_ref.collection(
+                    "dataset_session"
+                ).document(
+                    project_name
+                ).collection(
+                    "class"
+                ).document(
+                    class_name
+                )
 
-                    reply_message(
-
-                        reply_token,
-
-                        "ขนาดต้องมากกว่า 0"
-                    )
-
-                    return jsonify({
-                        "status": "error"
-                    })
-
-                # =========================================
+                # =====================================================
                 # SAVE SESSION
-                # =========================================
+                # =====================================================
 
                 session_ref.set({
 
                     "project":
                         project_name,
 
-                    "label":
+                    "class":
                         class_name,
 
                     "resize_width":
@@ -856,15 +1234,44 @@ def main_route():
                     "mode":
                         "universal",
 
+                    "total_images":
+                        0,
+
+                    "worker_online":
+                        True,
+
+                    "updated_at":
+                        datetime.utcnow(),
+
+                    "user_id":
+                        user_id
+                })
+
+                # =====================================================
+                # ACTIVE SESSION
+                # =====================================================
+
+                user_ref.collection(
+                    "active_session"
+                ).document(
+                    "current"
+                ).set({
+
+                    "project":
+                        project_name,
+
+                    "class":
+                        class_name,
+
                     "updated_at":
                         datetime.utcnow()
                 })
 
                 print("SESSION SAVED")
 
-                # =========================================
+                # =====================================================
                 # REPLY
-                # =========================================
+                # =====================================================
 
                 reply_message(
 
@@ -883,8 +1290,9 @@ def main_route():
                 })
 
             # =====================================================
-            # IMAGE MESSAGE
+            # IMAGE
             # =====================================================
+
             elif message_type == "image":
 
                 return handle_image(
@@ -1169,316 +1577,6 @@ def download_dataset(event, parts):
                 str(e)
 
         }), 500   
-# =========================================================
-def handle_image(event):
-
-    try:
-
-        reply_token = event.get(
-            "replyToken"
-        )
-
-        source = event.get(
-            "source",
-            {}
-        )
-
-        user_id = source.get(
-            "userId"
-        )
-
-        message = event.get(
-            "message",
-            {}
-        )
-
-        # ====================================
-        # GET SESSION
-        # ====================================
-
-        session_doc = worker_db.collection(
-            "user"
-        ).document(
-            user_id
-        ).collection(
-            "dataset_session"
-        ).document(
-            user_id
-        ).get()
-
-        if not session_doc.exists:
-
-            reply_message(
-
-                reply_token,
-
-                "กรุณาพิมพ์:\n"
-                "project/class/224x224"
-            )
-
-            return jsonify({
-                "status": "error"
-            })
-
-        session_data = session_doc.to_dict()
-
-        project_name = session_data.get(
-            "project"
-        )
-
-        label_name = session_data.get(
-            "label"
-        )
-
-        resize_width = int(
-
-            session_data.get(
-                "resize_width",
-                224
-            )
-        )
-
-        resize_height = int(
-
-            session_data.get(
-                "resize_height",
-                224
-            )
-        )
-
-        print("PROJECT =", project_name)
-        print("LABEL =", label_name)
-
-        print(
-            "SIZE =",
-            resize_width,
-            resize_height
-        )
-
-        # ====================================
-        # GET IMAGE FROM LINE
-        # ====================================
-
-        message_id = message.get(
-            "id"
-        )
-
-        image_url = (
-            "https://api-data.line.me/v2/bot/message/"
-            f"{message_id}/content"
-        )
-
-        print("DOWNLOAD IMAGE")
-
-        r = requests.get(
-
-            image_url,
-
-            headers={
-
-                "Authorization":
-                    f"Bearer {LINE_CHANNEL_ACCESS_TOKEN}"
-            },
-
-            timeout=30
-        )
-
-        print(
-            "LINE STATUS =",
-            r.status_code
-        )
-
-        if r.status_code != 200:
-
-            reply_message(
-
-                reply_token,
-
-                f"โหลดรูปไม่สำเร็จ\n"
-                f"STATUS: {r.status_code}"
-            )
-
-            return jsonify({
-                "status": "error"
-            })
-
-        # ====================================
-        # OPEN IMAGE
-        # ====================================
-
-        image = Image.open(
-            BytesIO(r.content)
-        )
-
-        image = image.convert(
-            "RGB"
-        )
-
-        # ====================================
-        # RESIZE
-        # ====================================
-
-        image = image.resize(
-
-            (
-                resize_width,
-                resize_height
-            )
-        )
-
-        # ====================================
-        # FILE NAME
-        # ====================================
-
-        filename = (
-            str(uuid.uuid4())
-            + ".jpg"
-        )
-
-        temp_path = (
-            f"/tmp/{filename}"
-        )
-
-        image.save(
-
-            temp_path,
-
-            format="JPEG"
-        )
-
-        print(
-            "IMAGE SAVED =",
-            temp_path
-        )
-
-        # ====================================
-        # STORAGE PATH
-        # ====================================
-
-        storage_path = (
-
-            f"{user_id}/"
-            f"{project_name}/"
-            f"{label_name}/"
-            f"{filename}"
-        )
-
-        print(
-            "STORAGE PATH =",
-            storage_path
-        )
-
-        # ====================================
-        # UPLOAD STORAGE
-        # ====================================
-
-        blob = bucket.blob(
-            storage_path
-        )
-
-        blob.upload_from_filename(
-
-            temp_path,
-
-            content_type="image/jpeg"
-        )
-
-        blob.make_public()
-
-        public_url = blob.public_url
-
-        print("UPLOAD SUCCESS")
-        print(public_url)
-
-        # ====================================
-        # COUNT IMAGES FROM STORAGE
-        # ====================================
-
-        storage_prefix = (
-
-            f"{user_id}/"
-            f"{project_name}/"
-            f"{label_name}/"
-        )
-
-        blobs = list(
-
-            bucket.list_blobs(
-                prefix=storage_prefix
-            )
-        )
-
-        # FILTER FOLDER
-        blobs = [
-
-            b for b in blobs
-            if not b.name.endswith("/")
-        ]
-
-        total_images = len(
-            blobs
-        )
-
-        print(
-            "TOTAL IMAGES =",
-            total_images
-        )
-
-        # ====================================
-        # DELETE TEMP
-        # ====================================
-
-        if os.path.exists(
-            temp_path
-        ):
-
-            os.remove(
-                temp_path
-            )
-
-        # ====================================
-        # REPLY
-        # ====================================
-
-        reply_message(
-
-            reply_token,
-
-            f"บันทึกรูปสำเร็จ\n\n"
-            f"PROJECT: {project_name}\n"
-            f"CLASS: {label_name}\n"
-            f"SIZE: "
-            f"{resize_width}x{resize_height}\n"
-            f"TOTAL: {total_images}\n\n"
-            f"ส่งรูปต่อได้"
-        )
-
-        return jsonify({
-            "status": "success"
-        })
-
-    except Exception as e:
-
-        traceback.print_exc()
-
-        reply_message(
-
-            event.get(
-                "replyToken"
-            ),
-
-            f"ERROR\n{str(e)}"
-        )
-
-        return jsonify({
-
-            "status":
-                "error",
-
-            "message":
-                str(e)
-
-        }), 500
 
 # =========================================================
 @app.route("/worker-webhook", methods=["POST"])
