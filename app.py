@@ -464,51 +464,24 @@ def main_route():
                 # =========================================
                 # COMMAND: "project all" (สร้าง Flex Carousel 4x10)
                 # =========================================
-                if text.strip().lower() == "project all":
+                if text.lower() == "project all":
 
-                    all_classes = []
+                     docs = list(
+                     worker_db
+                         .collection("user")
+                     .document(user_id)
+                     .collection("dataset_session")
+                         .document("imagenumber")
+                         .collection("class")
+                          .stream()
+                                    )
 
-                    project_docs = user_ref.collection(
-                        "dataset_session"
-                    ).stream()
+                reply_message(
+                            reply_token,
+                              f"class={len(docs)}"
+                                     )
 
-                    for p_doc in project_docs:
-
-                        proj_name = p_doc.id
-
-                        print(
-                            "PROJECT =",
-                            proj_name
-                        )
-
-                        class_docs = (
-                            user_ref
-                            .collection("dataset_session")
-                            .document(proj_name)
-                            .collection("class")
-                            .stream()
-                        )
-
-                        for c_doc in class_docs:
-
-                            c_data = c_doc.to_dict() or {}
-
-                            all_classes.append({
-                                "project": proj_name,
-                                "label": c_data.get(
-                                    "label",
-                                    c_doc.id
-                                )
-                            })
-
-                    reply_message(
-                reply_token,
-                      user_id
-                           )
-
-                    return jsonify({
-                        "status": "success"
-                    })
+                return jsonify({"status":"success"})
 
                 # =========================================
                 # DOWNLOAD
