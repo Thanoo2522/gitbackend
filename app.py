@@ -493,23 +493,32 @@ def main_route():
 
                             c_data = c_doc.to_dict() or {}
 
-                            all_classes.append({
-                                "project": proj_name,
-                                "label": c_data.get(
-                                    "label",
-                                    c_doc.id
-                                )
-                            })
+                        all_classes.append({
+                               "project": c_data.get("project", proj_name),
+                             "label": c_data.get("label", c_doc.id),
+                             "mode": c_data.get("mode", "universal"),
+                                 "resize_width": c_data.get("resize_width", 224),
+                              "resize_height": c_data.get("resize_height", 224),
+                             "total_images": c_data.get("total_images", 0)
+                                            })
+
+                        msg = []
+
+                    for item in all_classes:
+
+                              msg.append(
+                              f"{item['project']} | "
+                              f"{item['label']} | "
+                              f"{item['resize_width']}x{item['resize_height']} | "
+                              f"{item['total_images']}"
+                                 )
 
                     reply_message(
-                        reply_token,
-                        f"FOUND {len(all_classes)} CLASSES"
-                    )
+                            reply_token,
+                           "\n".join(msg[:5])
+                                        )
 
-                    return jsonify({
-                        "status": "success"
-                    })
-
+                    return jsonify({"status":"success"})
                 # =========================================
                 # DOWNLOAD
                 # =========================================
