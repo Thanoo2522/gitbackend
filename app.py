@@ -1013,9 +1013,23 @@ def handle_image(event):
 
         }), 500
     
-# =========================================================
-# FLEX PROJECT MONITOR
-# =========================================================
+#=========================================
+# =====================================================
+# ฟังก์ชันยิง FLEX MESSAGE (เพิ่มเข้าไปเพื่อแก้ปัญหา Error)
+# =====================================================
+def reply_flex_message(reply_token, flex_contents, alt_text="Notification"):
+    """
+    ฟังก์ชันส่ง Flex Message โดยแปลงโครงสร้างของกล่อง Flex (Dict) 
+    ให้อยู่ในรูปแบบ payload ส่งกลับผ่านฟังก์ชัน reply_message เดิมของคุณ
+    """
+    flex_payload = {
+        "type": "flex",
+        "altText": alt_text,
+        "contents": flex_contents
+    }
+    # ส่งต่อออบเจกต์ Flex ไปยังฟังก์ชัน reply_message หลักของระบบคุณ
+    return reply_message(reply_token, flex_payload)
+#========================================
 
 def create_project_monitor_flex(projects_data):
 
@@ -1233,7 +1247,7 @@ def create_project_monitor_flex(projects_data):
         "contents": bubbles
     }
 
-#========================================
+#=====================================================================
 @app.route("/main-route", methods=["POST"])
 def main_route():
 
@@ -1294,7 +1308,7 @@ def main_route():
                 print("TEXT =", text)
 
                 # =========================================
-                # USER REF
+                # USER REF & SESSION REF
                 # =========================================
 
                 user_ref = worker_db.collection(
@@ -1345,7 +1359,7 @@ def main_route():
 
                 # =========================================
                 # SHOW SESSION
-                # =================================== 
+                # =========================================
 
                 if text.lower() == "session":
 
@@ -1373,6 +1387,63 @@ def main_route():
                         f"SIZE: "
                         f"{data.get('resize_width')}x"
                         f"{data.get('resize_height')}"
+                    )
+
+                    return jsonify({
+                        "status": "success"
+                    })
+
+                # =========================================
+                # PROJECT ALL (ดึงเอกสารทั้งหมดใต้ dataset_session)
+                # =========================================
+
+                if text.lower() == "project all":
+
+                    # ดึงเอกสารทั้งหมด (Documents) จาก Collection ย่อย dataset_session
+                    docs = user_ref.collection(
+                        "dataset_session"
+                    ).stream()
+
+                    projects_data = []
+
+                    for doc in docs:
+
+                        data = doc.to_dict()
+
+                        # หากฟิลด์ project_name ไม่มีในเอกสาร จะใช้ ID ของเอกสารแทน
+                        if "project_name" not in data:
+                            
+                            data["project_name"] = data.get(
+                                "project", 
+                                doc.id
+                            )
+
+                        projects_data.append(
+                            data
+                        )
+
+                    # กรณีไม่มีเอกสารอยู่เลย
+                    if not projects_data:
+
+                        reply_message(
+                            reply_token,
+                            "ไม่พบข้อมูลโปรเจกต์ของคุณในระบบ"
+                        )
+
+                        return jsonify({
+                            "status": "success"
+                        })
+
+                    # สร้าง Flex Message โครงสร้าง Carousel จากฟังก์ชันของคุณ
+                    flex_contents = create_project_monitor_flex(
+                        projects_data
+                    )
+
+                    # ส่ง Flex Message กลับไปยังไลน์ (ตรวจสอบให้มั่นใจว่าฟังก์ชันรองรับออบเจกต์ Flex)
+                    reply_flex_message(
+                        reply_token,
+                        flex_contents,
+                        alt_text="AI Project Monitor"
                     )
 
                     return jsonify({
@@ -1413,7 +1484,7 @@ def main_route():
 
                 # =========================================
                 # CLASS
-                # =============================== 
+                # =========================================
 
                 class_name = path_parts[1] \
                     .strip() \
@@ -1536,24 +1607,10 @@ def main_route():
                 return handle_image(
                     event
                 )
-
-        return jsonify({
-            "status": "success"
-        })
-
+            return jsonify({"status": "success"})
     except Exception as e:
-
         traceback.print_exc()
-
-        return jsonify({
-
-            "status":
-                "error",
-
-            "message":
-                str(e)
-
-        }), 500
+        return jsonify({"status": "error","message": str(e)})
 #=======================================   
 def download_dataset(event, parts):
 
