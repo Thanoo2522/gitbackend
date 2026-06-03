@@ -464,118 +464,18 @@ def main_route():
                 # =========================================
                 # COMMAND: "project all" (สร้าง Flex Carousel 4x10)
                 # =========================================
-                if text.lower() == "project all":
-                    print("COMMAND: project all triggered")
-                    
-                    all_classes = []
-                    
-                    # 1. ดึงรายชื่อโปรเจกต์ทั้งหมดที่มีอยู่จริงจากเอกสารใน active_session
-                    project_docs = user_ref.collection("active_session").stream()
-                    
-                    for p_doc in project_docs:
-                        proj_name = p_doc.id
-                        print("FOUND PROJECT =", proj_name)
+             if text.strip().lower() == "project all":
 
-                        # 2. วิ่งเข้าไปเจาะคอลเลกชันย่อย class ใน dataset_session ของโปรเจกต์นั้น
-                        class_docs = user_ref.collection("dataset_session").document(proj_name).collection("class").stream()
+                  print("PROJECT ALL COMMAND")
 
-                        for c_doc in class_docs:
-                            c_data = c_doc.to_dict() or {}
-                            print("CLASS", proj_name, c_doc.id)
-                            
-                            # ดึงค่าและเตรียมข้อมูลใส่ลงในรายการทั้งหมด (all_classes)
-                            label_val = c_data.get("label", c_doc.id)
-                            totalimage = c_data.get("total_images", 0)
-                            
-                            
-                            width_val = c_data.get("resize_width") or c_data.get("width") or 224
-                            height_val = c_data.get("resize_height") or c_data.get("height") or 224
-                            
-                            all_classes.append({
-                                "project": proj_name,
-                                "label": str(label_val),
-                                "width": int(width_val),
-                                "height": int(height_val),
-                                "totalimage": totalimage
-                            })
+                         reply_message(
+                               reply_token,
+                             "ready"
+                             )
 
-                    # ถ้าตรวจแล้วอาเรย์ว่างเปล่า ไม่มีข้อมูลเลย
-                    if not all_classes:
-                        reply_message(reply_token, "📭 ไม่พบข้อมูลโปรเจกต์หรือคลาสในระบบของคุณ")
-                        return jsonify({"status": "success"})
-
-                    # จำกัดสเปก Flex Carousel สูงสุดที่ 40 รายการ (10 Bubbles x 4 แถว)
-                    all_classes = all_classes[:40]
-
-                    # 3. ประกอบโครงสร้างเข้า Flex Carousel (จัดกลุ่มกลุ่มละ 4 ชิ้นลงในแต่ละ Bubble)
-                    bubbles = []
-                    chunk_size = 4
-                    
-                    for i in range(0, len(all_classes), chunk_size):
-                        chunk = all_classes[i:i + chunk_size]
-                        
-                        contents_box = []
-                        for item in chunk:
-                            p_name = item["project"]
-                            l_name = item["label"]
-                            w_sz = item["width"]
-                            h_sz = item["height"]
-                            img_count = item["totalimage"]
-                            
-                            # ข้อความในรูปแบบที่ระบบต้องการเวลาผู้ใช้กดคลิก
-                            command_text = f"{p_name}/{l_name}/{w_sz}x{h_sz}"
-                            
-                            # เพิ่มจำนวนรูป ลงไปในปุ่มให้เห็นชัดเจน
-                            item_element = {
-                                "type": "button",
-                                "action": {
-                                    "type": "message",
-                                    "label": f"{p_name}-{l_name}"[:20],
-                                    "text": command_text
-                                },
-                                "style": "secondary",
-                                "height": "sm",
-                                "margin": "md"
-                            }
-                            contents_box.append(item_element)
-
-                        bubble = {
-                            "type": "bubble",
-                            "size": "medium",
-                            "header": {
-                                "type": "box",
-                                "layout": "vertical",
-                                "contents": [
-                                    {
-                                        "type": "text",
-                                        "text": "📋 รายการคลาสทั้งหมด",
-                                        "weight": "bold",
-                                        "size": "sm",
-                                        "color": "#1DB954"
-                                    }
-                                ]
-                            },
-                            "body": {
-                                "type": "box",
-                                "layout": "vertical",
-                                "contents": contents_box
-                            }
-                        }
-                        bubbles.append(bubble)
-
-                    # สร้าง Payload ตัวเต็มของ LINE Flex Message
-                    flex_carousel_payload = {
-                        "type": "flex",
-                        "altText": "รายการโปรเจกต์ทั้งหมดของคุณ",
-                        "contents": {
-                            "type": "carousel",
-                            "contents": bubbles
-                        }
-                    }
-
-                    # ส่งข้อความกลับหาผู้ใช้ และตัดจบการทำงานของ event นี้ทันที
-                    reply_message(reply_token, flex_carousel_payload)
-                    return jsonify({"status": "success"})
+                              return jsonify({
+                                  "status": "success"
+                                     })
 
                 # =========================================
                 # DOWNLOAD
