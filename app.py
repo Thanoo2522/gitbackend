@@ -1014,9 +1014,6 @@ def handle_image(event):
         }), 500
     
 #=========================================
-# =====================================================
-# ฟังก์ชันยิง FLEX MESSAGE (เพิ่มเข้าไปเพื่อแก้ปัญหา Error)
-# =====================================================
 def reply_flex_message(reply_token, flex_contents, alt_text="Notification"):
     """
     ฟังก์ชันส่ง Flex Message โดยแปลงโครงสร้างของกล่อง Flex (Dict) 
@@ -1029,6 +1026,7 @@ def reply_flex_message(reply_token, flex_contents, alt_text="Notification"):
     }
     # ส่งต่อออบเจกต์ Flex ไปยังฟังก์ชัน reply_message หลักของระบบคุณ
     return reply_message(reply_token, flex_payload)
+
 #========================================
 
 def create_project_monitor_flex(projects_data):
@@ -1036,217 +1034,122 @@ def create_project_monitor_flex(projects_data):
     bubbles = []
 
     # =====================================================
-    # LIMIT 40 BUBBLES
+    # CRITICAL LIMIT: LINE CAROUSEL MAX IS 12 BUBBLES ONLY!
     # =====================================================
-
-    projects_data = projects_data[:40]
+    projects_data = projects_data[:12]
 
     for item in projects_data:
 
-        project_name = item.get(
-            "project_name",
-            "-"
-        )
+        project_name = str(item.get("project_name", "-"))
+        total_classes = str(item.get("total_classes", 0))
+        total_images = str(item.get("total_images", 0))
+        latest_upload = str(item.get("latest_upload", "-"))
 
-        total_classes = item.get(
-            "total_classes",
-            0
-        )
-
-        total_images = item.get(
-            "total_images",
-            0
-        )
-
-        latest_upload = item.get(
-            "latest_upload",
-            "-"
-        )
+        # เช็คค่าตัวเลขเพื่อตั้งค่า Text สถานะ (แปลงเป็น int ก่อนเช็ค)
+        try:
+            img_count = int(item.get("total_images", 0))
+        except:
+            img_count = 0
 
         # =================================================
         # STATUS
         # =================================================
-
-        if total_images >= 1000:
-
+        if img_count >= 1000:
             status_text = "🟢 READY"
-
-        elif total_images >= 100:
-
+        elif img_count >= 100:
             status_text = "🟡 COLLECTING"
-
         else:
-
             status_text = "🔴 LOW DATA"
 
         # =================================================
-        # BUBBLE
+        # BUBBLE STRUCTURE
         # =================================================
-
         bubble = {
-
             "type": "bubble",
-
             "size": "mega",
-
             "body": {
-
                 "type": "box",
-
                 "layout": "vertical",
-
                 "spacing": "md",
-
                 "contents": [
-
                     {
                         "type": "text",
-
-                        "text":
-                            "🤖 AI PROJECT",
-
-                        "size":
-                            "sm",
-
-                        "color":
-                            "#999999"
+                        "text": "🤖 AI PROJECT",
+                        "size": "sm",
+                        "color": "#999999"
                     },
-
                     {
                         "type": "text",
-
-                        "text":
-                            project_name,
-
-                        "weight":
-                            "bold",
-
-                        "size":
-                            "xl",
-
-                        "wrap":
-                            True
+                        "text": project_name,
+                        "weight": "bold",
+                        "size": "xl",
+                        "wrap": True
                     },
-
                     {
                         "type": "separator",
-
-                        "margin":
-                            "md"
+                        "margin": "md"
                     },
-
                     {
                         "type": "box",
-
                         "layout": "vertical",
-
-                        "margin":
-                            "md",
-
-                        "spacing":
-                            "sm",
-
+                        "margin": "md",
+                        "spacing": "sm",
                         "contents": [
-
                             {
                                 "type": "text",
-
-                                "text":
-                                    f"📦 CLASS: {total_classes}",
-
-                                "size":
-                                    "sm"
+                                "text": f"📦 CLASS: {total_classes}",
+                                "size": "sm"
                             },
-
                             {
                                 "type": "text",
-
-                                "text":
-                                    f"🖼️ IMAGES: {total_images}",
-
-                                "size":
-                                    "sm"
+                                "text": f"🖼️ IMAGES: {total_images}",
+                                "size": "sm"
                             },
-
                             {
                                 "type": "text",
-
-                                "text":
-                                    status_text,
-
-                                "size":
-                                    "sm",
-
-                                "weight":
-                                    "bold"
+                                "text": status_text,
+                                "size": "sm",
+                                "weight": "bold"
                             },
-
                             {
                                 "type": "text",
-
-                                "text":
-                                    f"⏱ {latest_upload}",
-
-                                "size":
-                                    "xs",
-
-                                "color":
-                                    "#999999",
-
-                                "wrap":
-                                    True
+                                "text": f"⏱ {latest_upload}",
+                                "size": "xs",
+                                "color": "#999999",
+                                "wrap": True
                             }
                         ]
                     }
                 ]
             },
-
             "footer": {
-
                 "type": "box",
-
                 "layout": "vertical",
-
                 "spacing": "sm",
-
                 "contents": [
-
                     {
                         "type": "button",
-
                         "style": "primary",
-
                         "height": "sm",
-
                         "action": {
-
                             "type": "message",
-
                             "label": "OPEN",
-
-                            "text":
-                                f"project {project_name}"
+                            "text": f"project {project_name}"
                         }
                     }
                 ]
             }
         }
 
-        bubbles.append(
-            bubble
-        )
+        bubbles.append(bubble)
 
     # =====================================================
     # FLEX CAROUSEL
     # =====================================================
-
     return {
-
         "type": "carousel",
-
         "contents": bubbles
     }
-
 #=====================================================================
 @app.route("/main-route", methods=["POST"])
 def main_route():
