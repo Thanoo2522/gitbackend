@@ -426,7 +426,6 @@ def reply_message(reply_token, payload):
     return r
         
 #=====================================================
-
 @app.route("/main-route", methods=["POST"])
 def main_route():
     try:
@@ -474,28 +473,30 @@ def main_route():
                     project_docs = user_ref.collection("active_session").stream()
                     
                     for p_doc in project_docs:
-                        proj_name = p_doc.id  # ได้ชื่อโปรเจกต์ เช่น "imagenumber"
-                        
+                        proj_name = p_doc.id
+                        print("FOUND PROJECT =", proj_name)
+
                         # 2. วิ่งเข้าไปเจาะคอลเลกชันย่อย class ใน dataset_session ของโปรเจกต์นั้น
                         class_docs = user_ref.collection("dataset_session").document(proj_name).collection("class").stream()
-                        
+
                         for c_doc in class_docs:
-                            c_data = c_doc.to_dict()
-                            if c_data:
-                                label_val = c_data.get("label", c_doc.id)
-                                totalimage = c_data.get("totalimage", 0)
-                                
-                                # รองรับชื่อฟิลด์เผื่อความยืดหยุ่น
-                                width_val = c_data.get("resize_width") or c_data.get("width") or 224
-                                height_val = c_data.get("resize_height") or c_data.get("height") or 224
-                                
-                                all_classes.append({
-                                    "project": proj_name,
-                                    "label": str(label_val),
-                                    "width": int(width_val),
-                                    "height": int(height_val),
-                                    "totalimage": totalimage
-                                })
+                            c_data = c_doc.to_dict() or {}
+                            print("CLASS", proj_name, c_doc.id)
+                            
+                            # ดึงค่าและเตรียมข้อมูลใส่ลงในรายการทั้งหมด (all_classes)
+                            label_val = c_data.get("label", c_doc.id)
+                            totalimage = c_data.get("totalimage", 0)
+                            
+                            width_val = c_data.get("resize_width") or c_data.get("width") or 224
+                            height_val = c_data.get("resize_height") or c_data.get("height") or 224
+                            
+                            all_classes.append({
+                                "project": proj_name,
+                                "label": str(label_val),
+                                "width": int(width_val),
+                                "height": int(height_val),
+                                "totalimage": totalimage
+                            })
 
                     # ถ้าตรวจแล้วอาเรย์ว่างเปล่า ไม่มีข้อมูลเลย
                     if not all_classes:
