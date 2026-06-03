@@ -502,9 +502,9 @@ def main_route():
                             })
 
                     reply_message(
-                        reply_token,
-                        f"FOUND {len(all_classes)} CLASSES"
-                    )
+                reply_token,
+                      user_id
+                           )
 
                     return jsonify({
                         "status": "success"
