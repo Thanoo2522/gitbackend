@@ -1311,118 +1311,125 @@ def main_route():
                 # PROJECT ALL
                 # =================================================
 
-                if text.lower() == "project all":
+                                   if text.lower() == "project all":
 
-                    dataset_ref = user_ref.collection(
-                        "dataset_session"
-                    )
+    dataset_ref = user_ref.collection(
+        "dataset_session"
+    )
 
-                    project_docs = dataset_ref.stream()
+    project_docs = dataset_ref.stream()
 
-                    projects_data = []
+    projects_data = []
 
-                    total_projects = 0
+    total_projects = 0
 
-                    for project_doc in project_docs:
+    for project_doc in project_docs:
 
-                        total_projects += 1
+        total_projects += 1
 
-                        project_name = project_doc.id
+        project_name = project_doc.id
 
-                        print(
-                            "PROJECT =",
-                            project_name
-                        )
+        print(
+            "PROJECT =",
+            project_name
+        )
 
-                        classes_ref = dataset_ref.document(
-                            project_name
-                        ).collection(
-                            "class"
-                        ).stream()
+        classes_ref = (
+            dataset_ref
+            .document(project_name)
+            .collection("class")
+            .stream()
+        )
 
-                        total_classes = 0
-                        total_images = 0
+        total_classes = 0
+        total_images = 0
 
-                        latest_upload = "-"
+        latest_upload = None
 
-                        for class_doc in classes_ref:
+        for class_doc in classes_ref:
 
-                            total_classes += 1
+            total_classes += 1
 
-                            class_data = class_doc.to_dict()
+            class_data = (
+                class_doc.to_dict()
+                or {}
+            )
 
-                            total_images += class_data.get(
-                                "total_images",
-                                0
-                            )
+            total_images += int(
+                class_data.get(
+                    "total_images",
+                    0
+                )
+            )
 
-                            last_upload = class_data.get(
-                                "last_upload"
-                            )
+            last_upload = class_data.get(
+                "last_upload"
+            )
 
-                            if last_upload:
+            if last_upload:
 
-                                latest_upload = str(
-                                    last_upload
-                                )
+                if latest_upload is None:
 
-                        projects_data.append({
+                    latest_upload = last_upload
 
-                            "project_name":
-                                project_name,
+                elif last_upload > latest_upload:
 
-                            "total_classes":
-                                total_classes,
+                    latest_upload = last_upload
 
-                            "total_images":
-                                total_images,
+        if latest_upload:
 
-                            "latest_upload":
-                                latest_upload
-                        })
+            latest_upload = str(
+                latest_upload
+            )
 
-                    # =============================================
-                    # EMPTY
-                    # =============================================
+        else:
 
-                    if total_projects == 0:
+            latest_upload = "-"
 
-                        reply_message(
+        projects_data.append({
 
-                            reply_token,
+            "project_name":
+                project_name,
 
-                            "ยังไม่มี project"
-                        )
+            "total_classes":
+                total_classes,
 
-                        return jsonify({
-                            "status": "success"
-                        })
+            "total_images":
+                total_images,
 
-                    # =============================================
-                    # FLEX JSON
-                    # =============================================
+            "latest_upload":
+                latest_upload
+        })
 
-                    flex_json = create_project_monitor_flex(
-                        projects_data
-                    )
+    if total_projects == 0:
 
-                    # =============================================
-                    # REPLY FLEX
-                    # =============================================
+        reply_message(
 
-                    reply_flex(
+            reply_token,
 
-                        reply_token,
+            "ยังไม่มี project"
+        )
 
-                        "AI PROJECT MONITOR",
+        return jsonify({
+            "status": "success"
+        })
 
-                        flex_json
-                    )
+    flex_json = create_project_monitor_flex(
+        projects_data
+    )
 
-                    return jsonify({
-                        "status": "success"
-                    })
+    reply_flex(
 
+        reply_token,
+
+        "AI PROJECT MONITOR",
+
+        flex_json
+    )
+
+    return jsonify({
+        "status": "success"
+    })
                 # =====================================================
                 # RESET
                 # =====================================================
