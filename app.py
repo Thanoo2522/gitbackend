@@ -464,16 +464,14 @@ def main_route():
                 # =========================================
                 # COMMAND: "project all" (สร้าง Flex Carousel 4x10)
                 # =========================================
-             if text.strip().lower() == "project all":
+                if text.strip().lower() == "project all":
 
-                  print("PROJECT ALL COMMAND")
-
-                         reply_message(
+                  reply_message(
                                reply_token,
                              "ready"
-                             )
+                             ) 
 
-                              return jsonify({
+                return jsonify({
                                   "status": "success"
                                      })
 
