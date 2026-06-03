@@ -1250,367 +1250,190 @@ def create_project_monitor_flex(projects_data):
 #=====================================================================
 @app.route("/main-route", methods=["POST"])
 def main_route():
-
     try:
-
-        body = request.get_json(
-            silent=True
-        ) or {}
+        body = request.get_json(silent=True) or {}
 
         print("=" * 50)
         print("MAIN ROUTE")
-        print(json.dumps(
-            body,
-            indent=2,
-            ensure_ascii=False
-        ))
+        print(json.dumps(body, indent=2, ensure_ascii=False))
         print("=" * 50)
 
-        events = body.get(
-            "events",
-            []
-        )
+        events = body.get("events", [])
 
         for event in events:
-
             if event.get("type") != "message":
                 continue
 
-            message = event.get(
-                "message",
-                {}
-            )
-
-            message_type = message.get(
-                "type"
-            )
+            message = event.get("message", {})
+            message_type = message.get("type")
 
             # =====================================================
             # TEXT MESSAGE
             # =====================================================
             if message_type == "text":
-
-                text = message.get(
-                    "text",
-                    ""
-                ).strip()
-
-                user_id = event[
-                    "source"
-                ][
-                    "userId"
-                ]
-
-                reply_token = event.get(
-                    "replyToken"
-                )
+                text = message.get("text", "").strip()
+                user_id = event["source"]["userId"]
+                reply_token = event.get("replyToken")
 
                 print("TEXT =", text)
 
                 # =========================================
                 # USER REF & SESSION REF
                 # =========================================
-
-                user_ref = worker_db.collection(
-                    "user"
-                ).document(
-                    user_id
-                )
-
-                session_ref = user_ref.collection(
-                    "dataset_session"
-                ).document(
-                    user_id
-                )
+                user_ref = worker_db.collection("user").document(user_id)
+                session_ref = user_ref.collection("dataset_session").document(user_id)
 
                 # =========================================
                 # DOWNLOAD
                 # =========================================
-
-                if text.lower().startswith(
-                    "download"
-                ):
-
+                if text.lower().startswith("download"):
                     parts = text.split(" ")
-
-                    return download_dataset(
-                        event,
-                        parts
-                    )
+                    return download_dataset(event, parts)
 
                 # =========================================
                 # RESET SESSION
                 # =========================================
-
                 if text.lower() == "reset":
-
                     session_ref.delete()
-
-                    reply_message(
-
-                        reply_token,
-
-                        "ล้าง session แล้ว"
-                    )
-
-                    return jsonify({
-                        "status": "success"
-                    })
+                    reply_message(reply_token, "ล้าง session แล้ว")
+                    return jsonify({"status": "success"})
 
                 # =========================================
                 # SHOW SESSION
                 # =========================================
-
                 if text.lower() == "session":
-
                     session_doc = session_ref.get()
-
                     if not session_doc.exists:
-
-                        reply_message(
-                            reply_token,
-                            "ไม่มี session"
-                        )
-
-                        return jsonify({
-                            "status": "error"
-                        })
+                        reply_message(reply_token, "ไม่มี session")
+                        return jsonify({"status": "error"})
 
                     data = session_doc.to_dict()
-
                     reply_message(
-
                         reply_token,
-
                         f"PROJECT: {data.get('project')}\n"
                         f"CLASS: {data.get('label')}\n"
-                        f"SIZE: "
-                        f"{data.get('resize_width')}x"
-                        f"{data.get('resize_height')}"
+                        f"SIZE: {data.get('resize_width')}x{data.get('resize_height')}"
                     )
-
-                    return jsonify({
-                        "status": "success"
-                    })
+                    return jsonify({"status": "success"})
 
                 # =========================================
-                # PROJECT ALL (ดึงเอกสารทั้งหมดใต้ dataset_session)
+                # PROJECT ALL (โครงสร้างลึกใต้ dataset_session)
                 # =========================================
-
-                if text.lower() == "project all":
-
-                    # ดึงเอกสารทั้งหมด (Documents) จาก Collection ย่อย dataset_session
-                    docs = user_ref.collection(
-                        "dataset_session"
-                    ).stream()
-
+                if text.strip().lower() == "project all":
+                    # 1. ดึงเอกสารโปรเจกต์ทั้งหมด (เช่น imagezoo) ภายใต้ /user/{user_id}/dataset_session/
+                    project_collections = user_ref.collection("dataset_session").list_documents()
                     projects_data = []
 
-                    for doc in docs:
+                    for project_doc_ref in project_collections:
+                        project_name = project_doc_ref.id  # ดึง Document ID เช่น "imagezoo"
+                        
+                        # 2. วิ่งเข้าไปที่ Subcollection ชื่อ "class" เพื่อดึงข้อมูลคลาสทั้งหมด (เช่น mouse)
+                        # Path: /user/{user_id}/dataset_session/{project_name}/class/
+                        class_docs = project_doc_ref.collection("class").stream()
 
-                        data = doc.to_dict()
+                        for class_doc in class_docs:
+                            class_name = class_doc.id  # ดึง Document ID ของคลาส เช่น "mouse"
+                            data = class_doc.to_dict() or {}
 
-                        # หากฟิลด์ project_name ไม่มีในเอกสาร จะใช้ ID ของเอกสารแทน
-                        if "project_name" not in data:
-                            
-                            data["project_name"] = data.get(
-                                "project", 
-                                doc.id
-                            )
+                            # ประกอบข้อมูลเพื่อเตรียมแปลงเป็น Flex Message การ์ด Carousel 
+                            project_item = {
+                                "project_name": f"{project_name} ({class_name})",  # แสดงชื่อโปรเจกต์คู่ชื่อคลาส
+                                "total_classes": data.get("total_classes", 1),     # ใช้ 1 เป็นค่าเริ่มต้นเนื่องจากเป็นข้อมูลระดับคลาส
+                                "total_images": data.get("total_images", 0),
+                                "latest_upload": data.get("latest_upload", "-")
+                            }
+                            projects_data.append(project_item)
 
-                        projects_data.append(
-                            data
-                        )
-
-                    # กรณีไม่มีเอกสารอยู่เลย
+                    # กรณีไม่มีเอกสารใดๆ อยู่เลยในระบบฐานข้อมูลของผู้ใช้นี้
                     if not projects_data:
+                        reply_message(reply_token, "ไม่พบข้อมูลโปรเจกต์ของคุณในระบบ")
+                        return jsonify({"status": "success"})
 
-                        reply_message(
-                            reply_token,
-                            "ไม่พบข้อมูลโปรเจกต์ของคุณในระบบ"
-                        )
+                    # สร้างชุด Flex Message โครงสร้าง Carousel จากฟังก์ชันของคุณ
+                    flex_contents = create_project_monitor_flex(projects_data)
 
-                        return jsonify({
-                            "status": "success"
-                        })
-
-                    # สร้าง Flex Message โครงสร้าง Carousel จากฟังก์ชันของคุณ
-                    flex_contents = create_project_monitor_flex(
-                        projects_data
-                    )
-
-                    # ส่ง Flex Message กลับไปยังไลน์ (ตรวจสอบให้มั่นใจว่าฟังก์ชันรองรับออบเจกต์ Flex)
-                    reply_flex_message(
-                        reply_token,
-                        flex_contents,
-                        alt_text="AI Project Monitor"
-                    )
-
-                    return jsonify({
-                        "status": "success"
-                    })
+                    # ส่ง Flex Message กลับไปยังไลน์
+                    reply_flex_message(reply_token, flex_contents, alt_text="AI Project Monitor")
+                    return jsonify({"status": "success"})
 
                 # =========================================
-                # FORMAT:
-                # project/class/230x230
+                # FORMAT: project/class/230x230
                 # =========================================
-
                 path_parts = text.split("/")
-
                 if len(path_parts) < 3:
-
                     reply_message(
-
                         reply_token,
-
                         "รูปแบบ:\n"
                         "project/class/230x230\n\n"
                         "ตัวอย่าง:\n"
                         "imagenumber/5/224x224\n"
                         "plant/rust/640x480"
                     )
-
-                    return jsonify({
-                        "status": "error"
-                    })
+                    return jsonify({"status": "error"})
 
                 # =========================================
-                # PROJECT
+                # PROJECT & CLASS & SIZE
                 # =========================================
-
-                project_name = path_parts[0] \
-                    .strip() \
-                    .lower()
-
-                # =========================================
-                # CLASS
-                # =========================================
-
-                class_name = path_parts[1] \
-                    .strip() \
-                    .lower()
-
-                # =========================================
-                # SIZE
-                # =========================================
-
-                size_text = path_parts[2] \
-                    .strip() \
-                    .lower()
+                project_name = path_parts[0].strip().lower()
+                class_name = path_parts[1].strip().lower()
+                size_text = path_parts[2].strip().lower()
 
                 if "x" not in size_text:
-
-                    reply_message(
-
-                        reply_token,
-
-                        "ขนาดผิดรูปแบบ\n"
-                        "เช่น 224x224"
-                    )
-
-                    return jsonify({
-                        "status": "error"
-                    })
+                    reply_message(reply_token, "ขนาดผิดรูปแบบ\nเช่น 224x224")
+                    return jsonify({"status": "error"})
 
                 try:
-
                     w, h = size_text.split("x")
-
                     resize_width = int(w)
-
                     resize_height = int(h)
-
-                except:
-
-                    reply_message(
-
-                        reply_token,
-
-                        "ขนาดไม่ถูกต้อง\n"
-                        "เช่น 224x224"
-                    )
-
-                    return jsonify({
-                        "status": "error"
-                    })
+                except Exception:
+                    reply_message(reply_token, "ขนาดไม่ถูกต้อง\nเช่น 224x224")
+                    return jsonify({"status": "error"})
 
                 # =========================================
                 # VALIDATE SIZE
                 # =========================================
-
-                if resize_width <= 0 \
-                or resize_height <= 0:
-
-                    reply_message(
-
-                        reply_token,
-
-                        "ขนาดต้องมากกว่า 0"
-                    )
-
-                    return jsonify({
-                        "status": "error"
-                    })
+                if resize_width <= 0 or resize_height <= 0:
+                    reply_message(reply_token, "ขนาดต้องมากกว่า 0")
+                    return jsonify({"status": "error"})
 
                 # =========================================
                 # SAVE SESSION
                 # =========================================
-
                 session_ref.set({
-
-                    "project":
-                        project_name,
-
-                    "label":
-                        class_name,
-
-                    "resize_width":
-                        resize_width,
-
-                    "resize_height":
-                        resize_height,
-
-                    "mode":
-                        "universal",
-
-                    "updated_at":
-                        datetime.utcnow()
+                    "project": project_name,
+                    "label": class_name,
+                    "resize_width": resize_width,
+                    "resize_height": resize_height,
+                    "mode": "universal",
+                    "updated_at": datetime.utcnow()
                 })
-
                 print("SESSION SAVED")
 
                 # =========================================
                 # REPLY
                 # =========================================
-
                 reply_message(
-
                     reply_token,
-
                     f"📦 DATASET READY\n\n"
                     f"PROJECT: {project_name}\n"
                     f"CLASS: {class_name}\n"
-                    f"SIZE: "
-                    f"{resize_width}x{resize_height}\n\n"
+                    f"SIZE: {resize_width}x{resize_height}\n\n"
                     f"ส่งรูปได้ต่อเนื่อง"
                 )
-
-                return jsonify({
-                    "status": "success"
-                })
+                return jsonify({"status": "success"})
 
             # =====================================================
             # IMAGE MESSAGE
             # =====================================================
             elif message_type == "image":
+                return handle_image(event)
 
-                return handle_image(
-                    event
-                )
-            return jsonify({"status": "success"})
+        return jsonify({"status": "success"})
+
     except Exception as e:
         traceback.print_exc()
-        return jsonify({"status": "error","message": str(e)})
+        return jsonify({"status": "error", "message": str(e)})
 #=======================================   
 def download_dataset(event, parts):
 
