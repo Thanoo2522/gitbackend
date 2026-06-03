@@ -616,7 +616,202 @@ def main_route():
             "message": str(e)
         }), 500
 
-#=======================================   
+  
+# =========================================================
+def handle_image(event):
+    try:
+        reply_token = event.get("replyToken")
+        source = event.get("source", {})
+        user_id = source.get("userId")
+        message = event.get("message", {})
+
+        # ====================================
+        # GET SESSION
+        # ====================================
+        session_doc = worker_db.collection(
+            "user"
+        ).document(
+            user_id
+        ).collection(
+            "dataset_session"
+        ).document(
+            user_id
+        ).get()
+
+        if not session_doc.exists:
+            reply_message(
+                reply_token,
+                "กรุณาพิมพ์:\n"
+                "project/class/224x224"
+            )
+            return jsonify({"status": "error"})
+
+        session_data = session_doc.to_dict()
+
+        project_name = session_data.get("project")
+        label_name = session_data.get("label")       # ค่าตัวอย่างเช่น "1"
+        mode_name = session_data.get("mode", "universal") # ดึงเพิ่มเพื่อเอาไปใส่ใน Path ที่ 2
+
+        resize_width = int(session_data.get("resize_width", 224))
+        resize_height = int(session_data.get("resize_height", 224))
+
+        print("PROJECT =", project_name)
+        print("LABEL =", label_name)
+        print("SIZE =", resize_width, resize_height)
+
+        # ====================================
+        # GET IMAGE FROM LINE
+        # ====================================
+        message_id = message.get("id")
+        image_url = f"https://api-data.line.me/v2/bot/message/{message_id}/content"
+
+        print("DOWNLOAD IMAGE")
+        r = requests.get(
+            image_url,
+            headers={"Authorization": f"Bearer {LINE_CHANNEL_ACCESS_TOKEN}"},
+            timeout=30
+        )
+
+        print("LINE STATUS =", r.status_code)
+        if r.status_code != 200:
+            reply_message(
+                reply_token,
+                f"โหลดรูปไม่สำเร็จ\nSTATUS: {r.status_code}"
+            )
+            return jsonify({"status": "error"})
+
+        # ====================================
+        # OPEN IMAGE
+        # ====================================
+        image = Image.open(BytesIO(r.content))
+        image = image.convert("RGB")
+
+        # ====================================
+        # RESIZE
+        # ====================================
+        image = image.resize((resize_width, resize_height))
+
+        # ====================================
+        # FILE NAME
+        # ====================================
+        filename = str(uuid.uuid4()) + ".jpg"
+        temp_path = f"/tmp/{filename}"
+        image.save(temp_path, format="JPEG")
+        print("IMAGE SAVED =", temp_path)
+
+        # ====================================
+        # STORAGE PATH
+        # ====================================
+        storage_path = f"{user_id}/{project_name}/{label_name}/{filename}"
+        print("STORAGE PATH =", storage_path)
+
+        # ====================================
+        # UPLOAD STORAGE
+        # ====================================
+        blob = bucket.blob(storage_path)
+        blob.upload_from_filename(temp_path, content_type="image/jpeg")
+        blob.make_public()
+        public_url = blob.public_url
+        print("UPLOAD SUCCESS:", public_url)
+
+        # ====================================
+        # COUNT IMAGES FROM STORAGE
+        # ====================================
+        storage_prefix = f"{user_id}/{project_name}/{label_name}/"
+        blobs = list(bucket.list_blobs(prefix=storage_prefix))
+        blobs = [b for b in blobs if not b.name.endswith("/")]
+        total_images = len(blobs)
+        print("TOTAL IMAGES =", total_images)
+
+        # ====================================
+        # WRITE / UPDATE TO NEW FIRESTORE PATHS
+        # ====================================
+        timestamp_now = firestore.SERVER_TIMESTAMP
+
+        # ปลายทางที่ 1
+        active_session_ref = worker_db.collection("user").document(user_id)\
+                                      .collection("active_session").document(project_name)
+
+        active_session_data = {
+            "label": label_name,
+            "resize_height": resize_height,
+            "resize_width": resize_width,
+            "total_images": total_images,
+            "updated_at": timestamp_now
+        }
+
+        active_session_ref.set(active_session_data, merge=True)
+
+        # ====================================
+        # สร้าง document project ให้มีตัวตนจริง
+        # ====================================
+        dataset_project_ref = worker_db.collection("user")\
+                                       .document(user_id)\
+                                       .collection("dataset_session")\
+                                       .document(project_name)
+
+        dataset_project_ref.set({
+            "project": project_name,
+            "updated_at": timestamp_now
+        }, merge=True)
+
+        # ====================================
+        # ปลายทางที่ 2
+        # ====================================
+        dataset_class_ref = worker_db.collection("user")\
+                                     .document(user_id)\
+                                     .collection("dataset_session")\
+                                     .document(project_name)\
+                                     .collection("class")\
+                                     .document(label_name)
+
+        dataset_class_data = {
+            "label": label_name,
+            "mode": mode_name,
+            "project": project_name,
+            "resize_height": resize_height,
+            "resize_width": resize_width,
+            "total_images": total_images,
+            "updated_at": timestamp_now
+        }
+
+        dataset_class_ref.set(
+            dataset_class_data,
+            merge=True
+        )
+
+        # ====================================
+        # DELETE TEMP
+        # ====================================
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
+
+        # ====================================
+        # REPLY
+        # ====================================
+        reply_message(
+            reply_token,
+            f"บันทึกรูปสำเร็จ\n\n"
+            f"PROJECT: {project_name}\n"
+            f"CLASS: {label_name}\n"
+            f"SIZE: {resize_width}x{resize_height}\n"
+            f"TOTAL: {total_images}\n\n"
+            f"ส่งรูปต่อได้"
+        )
+
+        return jsonify({"status": "success"})
+
+    except Exception as e:
+        traceback.print_exc()
+        reply_message(
+            event.get("replyToken"),
+            f"ERROR\n{str(e)}"
+        )
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
+ #=======================================   
 def download_dataset(event, parts):
 
     try:
@@ -876,178 +1071,7 @@ def download_dataset(event, parts):
             "message":
                 str(e)
 
-        }), 500   
-# =========================================================
-def handle_image(event):
-    try:
-        reply_token = event.get("replyToken")
-        source = event.get("source", {})
-        user_id = source.get("userId")
-        message = event.get("message", {})
-
-        # ====================================
-        # GET SESSION
-        # ====================================
-        session_doc = worker_db.collection(
-            "user"
-        ).document(
-            user_id
-        ).collection(
-            "dataset_session"
-        ).document(
-            user_id
-        ).get()
-
-        if not session_doc.exists:
-            reply_message(
-                reply_token,
-                "กรุณาพิมพ์:\n"
-                "project/class/224x224"
-            )
-            return jsonify({"status": "error"})
-
-        session_data = session_doc.to_dict()
-
-        project_name = session_data.get("project")
-        label_name = session_data.get("label")       # ค่าตัวอย่างเช่น "1"
-        mode_name = session_data.get("mode", "universal") # ดึงเพิ่มเพื่อเอาไปใส่ใน Path ที่ 2
-
-        resize_width = int(session_data.get("resize_width", 224))
-        resize_height = int(session_data.get("resize_height", 224))
-
-        print("PROJECT =", project_name)
-        print("LABEL =", label_name)
-        print("SIZE =", resize_width, resize_height)
-
-        # ====================================
-        # GET IMAGE FROM LINE
-        # ====================================
-        message_id = message.get("id")
-        image_url = f"https://api-data.line.me/v2/bot/message/{message_id}/content"
-
-        print("DOWNLOAD IMAGE")
-        r = requests.get(
-            image_url,
-            headers={"Authorization": f"Bearer {LINE_CHANNEL_ACCESS_TOKEN}"},
-            timeout=30
-        )
-
-        print("LINE STATUS =", r.status_code)
-        if r.status_code != 200:
-            reply_message(
-                reply_token,
-                f"โหลดรูปไม่สำเร็จ\nSTATUS: {r.status_code}"
-            )
-            return jsonify({"status": "error"})
-
-        # ====================================
-        # OPEN IMAGE
-        # ====================================
-        image = Image.open(BytesIO(r.content))
-        image = image.convert("RGB")
-
-        # ====================================
-        # RESIZE
-        # ====================================
-        image = image.resize((resize_width, resize_height))
-
-        # ====================================
-        # FILE NAME
-        # ====================================
-        filename = str(uuid.uuid4()) + ".jpg"
-        temp_path = f"/tmp/{filename}"
-        image.save(temp_path, format="JPEG")
-        print("IMAGE SAVED =", temp_path)
-
-        # ====================================
-        # STORAGE PATH
-        # ====================================
-        storage_path = f"{user_id}/{project_name}/{label_name}/{filename}"
-        print("STORAGE PATH =", storage_path)
-
-        # ====================================
-        # UPLOAD STORAGE
-        # ====================================
-        blob = bucket.blob(storage_path)
-        blob.upload_from_filename(temp_path, content_type="image/jpeg")
-        blob.make_public()
-        public_url = blob.public_url
-        print("UPLOAD SUCCESS:", public_url)
-
-        # ====================================
-        # COUNT IMAGES FROM STORAGE
-        # ====================================
-        storage_prefix = f"{user_id}/{project_name}/{label_name}/"
-        blobs = list(bucket.list_blobs(prefix=storage_prefix))
-        blobs = [b for b in blobs if not b.name.endswith("/")]
-        total_images = len(blobs)
-        print("TOTAL IMAGES =", total_images)
-
-        # ====================================
-        # WRITE / UPDATE TO NEW FIRESTORE PATHS
-        # ====================================
-        timestamp_now = firestore.SERVER_TIMESTAMP
-
-        # ปลายทางที่ 1: /user/{user_id}/active_session/{projectNmae}/
-        active_session_ref = worker_db.collection("user").document(user_id)\
-                                      .collection("active_session").document(project_name)
-        active_session_data = {
-            "label": label_name,
-            "resize_height": resize_height,
-            "resize_width": resize_width,
-            "total_images": total_images,
-            "updated_at": timestamp_now
-        }
-        active_session_ref.set(active_session_data, merge=True)
-
-        # ปลายทางที่ 2: /user/{user_id}/dataset_session/{projectNmae}/class/{className}
-        dataset_class_ref = worker_db.collection("user").document(user_id)\
-                                     .collection("dataset_session").document(project_name)\
-                                     .collection("class").document(label_name)
-        dataset_class_data = {
-            "label": label_name,
-            "mode": mode_name,
-            "project": project_name,
-            "resize_height": resize_height,
-            "resize_width": resize_width,
-            "total_images": total_images,
-            "updated_at": timestamp_now
-        }
-        dataset_class_ref.set(dataset_class_data, merge=True)
-
-        print("FIRESTORE DATA UPDATED SUCCESSFULLY")
-
-        # ====================================
-        # DELETE TEMP
-        # ====================================
-        if os.path.exists(temp_path):
-            os.remove(temp_path)
-
-        # ====================================
-        # REPLY
-        # ====================================
-        reply_message(
-            reply_token,
-            f"บันทึกรูปสำเร็จ\n\n"
-            f"PROJECT: {project_name}\n"
-            f"CLASS: {label_name}\n"
-            f"SIZE: {resize_width}x{resize_height}\n"
-            f"TOTAL: {total_images}\n\n"
-            f"ส่งรูปต่อได้"
-        )
-
-        return jsonify({"status": "success"})
-
-    except Exception as e:
-        traceback.print_exc()
-        reply_message(
-            event.get("replyToken"),
-            f"ERROR\n{str(e)}"
-        )
-        return jsonify({
-            "status": "error",
-            "message": str(e)
-        }), 500
+        }), 500 
 # =========================================================
 @app.route("/worker-webhook", methods=["POST"])
 def worker_webhook():
