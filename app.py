@@ -1233,7 +1233,7 @@ def create_project_monitor_flex(projects_data):
         "contents": bubbles
     }
 
-#============================== main route =====================
+#============================== main route
 @app.route("/main-route", methods=["POST"])
 def main_route():
 
@@ -1309,7 +1309,7 @@ def main_route():
 
                 # =================================================
                 # PROJECT ALL
-                # =================================================
+                # ========================================= 
 
                 if text.lower() == "project all":
 
