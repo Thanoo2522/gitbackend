@@ -485,7 +485,8 @@ def main_route():
                             
                             # ดึงค่าและเตรียมข้อมูลใส่ลงในรายการทั้งหมด (all_classes)
                             label_val = c_data.get("label", c_doc.id)
-                            totalimage = c_data.get("totalimage", 0)
+                            totalimage = c_data.get("total_images", 0)
+                            
                             
                             width_val = c_data.get("resize_width") or c_data.get("width") or 224
                             height_val = c_data.get("resize_height") or c_data.get("height") or 224
@@ -529,7 +530,7 @@ def main_route():
                                 "type": "button",
                                 "action": {
                                     "type": "message",
-                                    "label": f"📁 {p_name} [{l_name}] ({img_count} รูป)",
+                                    "label": f"{p_name}-{l_name}"[:20],
                                     "text": command_text
                                 },
                                 "style": "secondary",
