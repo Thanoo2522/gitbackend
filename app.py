@@ -1004,32 +1004,25 @@ def download_dataset(event, parts):
 
         }), 500   
 # =========================================================
+import os
+import uuid
+import traceback
+from io import BytesIO
+import requests
+from PIL import Image
+from flask import jsonify
+from google.cloud import firestore  # มั่นใจว่ามีการ import ตัวนี้มาใช้งานสำหรับ SERVER_TIMESTAMP
+
 def handle_image(event):
-
     try:
-
-        reply_token = event.get(
-            "replyToken"
-        )
-
-        source = event.get(
-            "source",
-            {}
-        )
-
-        user_id = source.get(
-            "userId"
-        )
-
-        message = event.get(
-            "message",
-            {}
-        )
+        reply_token = event.get("replyToken")
+        source = event.get("source", {})
+        user_id = source.get("userId")
+        message = event.get("message", {})
 
         # ====================================
-        # GET SESSION
+        # GET SESSION (จาก path: /user/{user_id}/dataset_session/user/{user_id})
         # ====================================
-
         session_doc = worker_db.collection(
             "user"
         ).document(
@@ -1041,279 +1034,147 @@ def handle_image(event):
         ).get()
 
         if not session_doc.exists:
-
             reply_message(
-
                 reply_token,
-
                 "กรุณาพิมพ์:\n"
                 "project/class/224x224"
             )
-
-            return jsonify({
-                "status": "error"
-            })
+            return jsonify({"status": "error"})
 
         session_data = session_doc.to_dict()
 
-        project_name = session_data.get(
-            "project"
-        )
+        project_name = session_data.get("project")
+        label_name = session_data.get("label")  # ค่า "1" ตามตัวอย่างข้อมูลของคุณ
+        mode_name = session_data.get("mode", "universal")
 
-        label_name = session_data.get(
-            "label"
-        )
-
-        resize_width = int(
-
-            session_data.get(
-                "resize_width",
-                224
-            )
-        )
-
-        resize_height = int(
-
-            session_data.get(
-                "resize_height",
-                224
-            )
-        )
+        resize_width = int(session_data.get("resize_width", 224))
+        resize_height = int(session_data.get("resize_height", 224))
 
         print("PROJECT =", project_name)
         print("LABEL =", label_name)
-
-        print(
-            "SIZE =",
-            resize_width,
-            resize_height
-        )
+        print("SIZE =", resize_width, resize_height)
 
         # ====================================
         # GET IMAGE FROM LINE
         # ====================================
-
-        message_id = message.get(
-            "id"
-        )
-
-        image_url = (
-            "https://api-data.line.me/v2/bot/message/"
-            f"{message_id}/content"
-        )
+        message_id = message.get("id")
+        image_url = f"https://api-data.line.me/v2/bot/message/{message_id}/content"
 
         print("DOWNLOAD IMAGE")
-
         r = requests.get(
-
             image_url,
-
-            headers={
-
-                "Authorization":
-                    f"Bearer {LINE_CHANNEL_ACCESS_TOKEN}"
-            },
-
+            headers={"Authorization": f"Bearer {LINE_CHANNEL_ACCESS_TOKEN}"},
             timeout=30
         )
 
-        print(
-            "LINE STATUS =",
-            r.status_code
-        )
-
+        print("LINE STATUS =", r.status_code)
         if r.status_code != 200:
-
             reply_message(
-
                 reply_token,
-
-                f"โหลดรูปไม่สำเร็จ\n"
-                f"STATUS: {r.status_code}"
+                f"โหลดรูปไม่สำเร็จ\nSTATUS: {r.status_code}"
             )
-
-            return jsonify({
-                "status": "error"
-            })
+            return jsonify({"status": "error"})
 
         # ====================================
-        # OPEN IMAGE
+        # OPEN IMAGE & RESIZE
         # ====================================
-
-        image = Image.open(
-            BytesIO(r.content)
-        )
-
-        image = image.convert(
-            "RGB"
-        )
+        image = Image.open(BytesIO(r.content))
+        image = image.convert("RGB")
+        image = image.resize((resize_width, resize_height))
 
         # ====================================
-        # RESIZE
+        # FILE NAME & SAVE TEMP
         # ====================================
-
-        image = image.resize(
-
-            (
-                resize_width,
-                resize_height
-            )
-        )
+        filename = str(uuid.uuid4()) + ".jpg"
+        temp_path = f"/tmp/{filename}"
+        image.save(temp_path, format="JPEG")
+        print("IMAGE SAVED =", temp_path)
 
         # ====================================
-        # FILE NAME
+        # STORAGE PATH & UPLOAD
         # ====================================
+        storage_path = f"{user_id}/{project_name}/{label_name}/{filename}"
+        print("STORAGE PATH =", storage_path)
 
-        filename = (
-            str(uuid.uuid4())
-            + ".jpg"
-        )
-
-        temp_path = (
-            f"/tmp/{filename}"
-        )
-
-        image.save(
-
-            temp_path,
-
-            format="JPEG"
-        )
-
-        print(
-            "IMAGE SAVED =",
-            temp_path
-        )
-
-        # ====================================
-        # STORAGE PATH
-        # ====================================
-
-        storage_path = (
-
-            f"{user_id}/"
-            f"{project_name}/"
-            f"{label_name}/"
-            f"{filename}"
-        )
-
-        print(
-            "STORAGE PATH =",
-            storage_path
-        )
-
-        # ====================================
-        # UPLOAD STORAGE
-        # ====================================
-
-        blob = bucket.blob(
-            storage_path
-        )
-
-        blob.upload_from_filename(
-
-            temp_path,
-
-            content_type="image/jpeg"
-        )
-
+        blob = bucket.blob(storage_path)
+        blob.upload_from_filename(temp_path, content_type="image/jpeg")
         blob.make_public()
-
         public_url = blob.public_url
-
-        print("UPLOAD SUCCESS")
-        print(public_url)
+        print("UPLOAD SUCCESS:", public_url)
 
         # ====================================
         # COUNT IMAGES FROM STORAGE
         # ====================================
+        storage_prefix = f"{user_id}/{project_name}/{label_name}/"
+        blobs = list(bucket.list_blobs(prefix=storage_prefix))
+        blobs = [b for b in blobs if not b.name.endswith("/")]
+        total_images = len(blobs)
+        print("TOTAL IMAGES =", total_images)
 
-        storage_prefix = (
+        # ====================================
+        # WRITE / UPDATE FIRESTORE (2 Paths ที่ต้องการเพิ่มเติม)
+        # ====================================
+        # เตรียมข้อมูลที่จะบันทึก
+        timestamp_now = firestore.SERVER_TIMESTAMP
 
-            f"{user_id}/"
-            f"{project_name}/"
-            f"{label_name}/"
-        )
+        # Path ที่ 1: /user/{user_id}/active_session/{project_name}/
+        active_session_data = {
+            "label": label_name,
+            "resize_height": resize_height,
+            "resize_width": resize_width,
+            "updated_at": timestamp_now
+        }
+        worker_db.collection("user").document(user_id)\
+            .collection("active_session").document(project_name)\
+            .set(active_session_data, merge=True)  # ใช้ merge=True เพื่อไม่ให้ฟิลด์อื่นหายถ้ามีอยู่ก่อนแล้ว
 
-        blobs = list(
+        # Path ที่ 2: /user/{user_id}/dataset_session/{project_name}/class/{label_name}
+        dataset_class_data = {
+            "label": label_name,
+            "mode": mode_name,
+            "project": project_name,
+            "resize_height": resize_height,
+            "resize_width": resize_width,
+            "updated_at": timestamp_now
+        }
+        worker_db.collection("user").document(user_id)\
+            .collection("dataset_session").document(project_name)\
+            .collection("class").document(label_name)\
+            .set(dataset_class_data, merge=True)
 
-            bucket.list_blobs(
-                prefix=storage_prefix
-            )
-        )
-
-        # FILTER FOLDER
-        blobs = [
-
-            b for b in blobs
-            if not b.name.endswith("/")
-        ]
-
-        total_images = len(
-            blobs
-        )
-
-        print(
-            "TOTAL IMAGES =",
-            total_images
-        )
+        print("FIRESTORE UPDATED SUCCESS")
 
         # ====================================
         # DELETE TEMP
         # ====================================
-
-        if os.path.exists(
-            temp_path
-        ):
-
-            os.remove(
-                temp_path
-            )
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
 
         # ====================================
         # REPLY
         # ====================================
-
         reply_message(
-
             reply_token,
-
             f"บันทึกรูปสำเร็จ\n\n"
             f"PROJECT: {project_name}\n"
             f"CLASS: {label_name}\n"
-            f"SIZE: "
-            f"{resize_width}x{resize_height}\n"
+            f"SIZE: {resize_width}x{resize_height}\n"
             f"TOTAL: {total_images}\n\n"
             f"ส่งรูปต่อได้"
         )
 
-        return jsonify({
-            "status": "success"
-        })
+        return jsonify({"status": "success"})
 
     except Exception as e:
-
         traceback.print_exc()
-
         reply_message(
-
-            event.get(
-                "replyToken"
-            ),
-
+            event.get("replyToken"),
             f"ERROR\n{str(e)}"
         )
-
         return jsonify({
-
-            "status":
-                "error",
-
-            "message":
-                str(e)
-
+            "status": "error",
+            "message": str(e)
         }), 500
-
 # =========================================================
 @app.route("/worker-webhook", methods=["POST"])
 def worker_webhook():
