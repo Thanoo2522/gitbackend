@@ -426,7 +426,6 @@ def reply_message(reply_token, payload):
     return r
         
 #=====================================================
-
 @app.route("/main-route", methods=["POST"])
 def main_route():
     try:
@@ -468,47 +467,44 @@ def main_route():
                 if text.lower() == "project all":
                     print("COMMAND: project all triggered")
                     
-                    # ลิสต์เก็บคู่ (project, class_item_dict) ทั้งหมดที่พบ
                     all_classes = []
                     
-                    # 1. ดึงเอกสารทั้งหมดที่เป็นรายชื่อโปรเจกต์ภายใต้ dataset_session ของผู้ใช้
-                    project_docs = user_ref.collection("dataset_session").stream()
+                    # 1. ดึงรายชื่อโปรเจกต์ทั้งหมดที่มีอยู่จริงจากเอกสารใน active_session
+                    project_docs = user_ref.collection("active_session").stream()
                     
                     for p_doc in project_docs:
-                        if p_doc.id == user_id:
-                            continue  # ข้ามเอกสารที่เป็น session metadata หลัก
+                        proj_name = p_doc.id  # ได้ชื่อโปรเจกต์ เช่น "imagenumber"
                         
-                        proj_name = p_doc.id
-                        
-                        # 2. เข้าไปดึงข้อมูลใน subcollection: class ของแต่ละโปรเจกต์
+                        # 2. วิ่งเข้าไปเจาะคอลเลกชันย่อย class ใน dataset_session ของโปรเจกต์นั้น
                         class_docs = user_ref.collection("dataset_session").document(proj_name).collection("class").stream()
                         
                         for c_doc in class_docs:
                             c_data = c_doc.to_dict()
                             if c_data:
-                             # ดึงค่า label ถ้าไม่มีให้ใช้ ID ของเอกสารแทน
                                 label_val = c_data.get("label", c_doc.id)
                                 totalimage = c_data.get("totalimage", 0)
-                                  # ดึงค่า width และ height (รองรับทั้งกรณีไม่มีฟิลด์ หรือชื่อฟิลด์ดึงค่ามาได้เป็นประเภทอื่น)
+                                
+                                # รองรับชื่อฟิลด์เผื่อความยืดหยุ่น
                                 width_val = c_data.get("resize_width") or c_data.get("width") or 224
                                 height_val = c_data.get("resize_height") or c_data.get("height") or 224
-        
+                                
                                 all_classes.append({
-                                 "project": proj_name,
-                                 "label": str(label_val),
-                                 "width": int(width_val),
-                                 "height": int(height_val),
-                                 "totalimage": totalimage
-                                                      })
+                                    "project": proj_name,
+                                    "label": str(label_val),
+                                    "width": int(width_val),
+                                    "height": int(height_val),
+                                    "totalimage": totalimage
+                                })
 
+                    # ถ้าตรวจแล้วอาเรย์ว่างเปล่า ไม่มีข้อมูลเลย
                     if not all_classes:
                         reply_message(reply_token, "📭 ไม่พบข้อมูลโปรเจกต์หรือคลาสในระบบของคุณ")
                         return jsonify({"status": "success"})
 
-                    # จำกัดจำนวนผลลัพธ์สูงสุดที่ 40 รายการ
+                    # จำกัดสเปก Flex Carousel สูงสุดที่ 40 รายการ (10 Bubbles x 4 แถว)
                     all_classes = all_classes[:40]
 
-                    # 3. จัดกลุ่มเข้า Flex Carousel (สูงสุด 10 Bubbles, Bubble ละสูงสุด 4 รายการ)
+                    # 3. ประกอบโครงสร้างเข้า Flex Carousel 
                     bubbles = []
                     chunk_size = 4
                     
@@ -521,14 +517,17 @@ def main_route():
                             l_name = item["label"]
                             w_sz = item["width"]
                             h_sz = item["height"]
+                            img_count = item["totalimage"]
                             
+                            # ข้อความในรูปแบบที่ระบบต้องการเวลาผู้ใช้กดคลิก
                             command_text = f"{p_name}/{l_name}/{w_sz}x{h_sz}"
                             
+                            # เพิ่มจำนวนรูป (เช่น [1] - 120 imgs) ลงไปในปุ่มให้เห็นชัดเจน
                             item_element = {
                                 "type": "button",
                                 "action": {
                                     "type": "message",
-                                    "label": f"📁 {p_name} [{l_name}]",
+                                    "label": f"📁 {p_name} [{l_name}] ({img_count} รูป)",
                                     "text": command_text
                                 },
                                 "style": "secondary",
@@ -561,7 +560,7 @@ def main_route():
                         }
                         bubbles.append(bubble)
 
-                    # โครงสร้างตัวห่อหุ้ม Flex Carousel Message ของ LINE
+                    # สร้าง Payload ตัวเต็มของ LINE Flex Message
                     flex_carousel_payload = {
                         "type": "flex",
                         "altText": "รายการโปรเจกต์ทั้งหมดของคุณ",
@@ -571,7 +570,7 @@ def main_route():
                         }
                     }
 
-                    # เรียกใช้ reply_message ตัวเดียวกัน โดยส่ง dict เข้าไปแทน string
+                    # ส่งข้อความกลับหาผู้ใช้
                     reply_message(reply_token, flex_carousel_payload)
                     return jsonify({"status": "success"})
 
