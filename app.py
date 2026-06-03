@@ -486,13 +486,20 @@ def main_route():
                         for c_doc in class_docs:
                             c_data = c_doc.to_dict()
                             if c_data:
+                             # ดึงค่า label ถ้าไม่มีให้ใช้ ID ของเอกสารแทน
+                                label_val = c_data.get("label", c_doc.id)
+                                totalimage = c_data.get("totalimage", 0)
+                                  # ดึงค่า width และ height (รองรับทั้งกรณีไม่มีฟิลด์ หรือชื่อฟิลด์ดึงค่ามาได้เป็นประเภทอื่น)
+                                width_val = c_data.get("resize_width") or c_data.get("width") or 224
+                                height_val = c_data.get("resize_height") or c_data.get("height") or 224
+        
                                 all_classes.append({
-                                    "project": proj_name,
-                                    "label": c_data.get("label", c_doc.id),
-                                    
-                                    "width": c_data.get("resize_width", 224),
-                                    "height": c_data.get("resize_height", 224)
-                                })
+                                 "project": proj_name,
+                                 "label": str(label_val),
+                                 "width": int(width_val),
+                                 "height": int(height_val),
+                                 "totalimage": totalimage
+                                                      })
 
                     if not all_classes:
                         reply_message(reply_token, "📭 ไม่พบข้อมูลโปรเจกต์หรือคลาสในระบบของคุณ")
