@@ -426,6 +426,7 @@ def reply_message(reply_token, payload):
     return r
         
 #=====================================================
+
 @app.route("/main-route", methods=["POST"])
 def main_route():
     try:
@@ -504,7 +505,7 @@ def main_route():
                     # จำกัดสเปก Flex Carousel สูงสุดที่ 40 รายการ (10 Bubbles x 4 แถว)
                     all_classes = all_classes[:40]
 
-                    # 3. ประกอบโครงสร้างเข้า Flex Carousel 
+                    # 3. ประกอบโครงสร้างเข้า Flex Carousel (จัดกลุ่มกลุ่มละ 4 ชิ้นลงในแต่ละ Bubble)
                     bubbles = []
                     chunk_size = 4
                     
@@ -522,7 +523,7 @@ def main_route():
                             # ข้อความในรูปแบบที่ระบบต้องการเวลาผู้ใช้กดคลิก
                             command_text = f"{p_name}/{l_name}/{w_sz}x{h_sz}"
                             
-                            # เพิ่มจำนวนรูป (เช่น [1] - 120 imgs) ลงไปในปุ่มให้เห็นชัดเจน
+                            # เพิ่มจำนวนรูป ลงไปในปุ่มให้เห็นชัดเจน
                             item_element = {
                                 "type": "button",
                                 "action": {
@@ -570,7 +571,7 @@ def main_route():
                         }
                     }
 
-                    # ส่งข้อความกลับหาผู้ใช้
+                    # ส่งข้อความกลับหาผู้ใช้ และตัดจบการทำงานของ event นี้ทันที
                     reply_message(reply_token, flex_carousel_payload)
                     return jsonify({"status": "success"})
 
