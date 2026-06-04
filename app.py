@@ -595,9 +595,13 @@ def build_project_all_flex_grouped(all_classes):
                         },
 
                         {
-                            "type": "button",
+                                "type": "button",
 
-                            "height": "sm",
+                                "style": "primary",
+
+                                "color": "#00C300",
+
+                                  "height": "sm",
 
                             "action": {
                                 "type": "message",
@@ -618,6 +622,16 @@ def build_project_all_flex_grouped(all_classes):
                 "type": "bubble",
 
                 "size": "mega",
+                    "styles": {
+
+                                "header": {
+                                            "backgroundColor": "#FF0000"
+                                          },
+
+                                "body": {
+                                            "backgroundColor": "#FFF5F5"
+                                       }
+                                },
 
                 "header": {
 
