@@ -523,135 +523,87 @@ def reply_message(reply_token, payload):
 #==============================================     
 def build_project_all_flex_grouped(all_classes):
 
-    projects = {}
-
-    for item in all_classes:
-
-        project_name = item["project"]
-
-        if project_name not in projects:
-            projects[project_name] = []
-
-        projects[project_name].append(item)
-
     bubbles = []
 
-    for project_name, classes in projects.items():
+    for item in all_classes[:10]:
 
-        chunks = [
-            classes[i:i + 4]
-            for i in range(
-                0,
-                len(classes),
-                4
-            )
-        ]
+        command_text = (
+            f"{item['project']}/"
+            f"{item['label']}/"
+            f"{item['resize_width']}x"
+            f"{item['resize_height']}"
+        )
 
-        for chunk in chunks:
+        bubble = {
+            "type": "bubble",
+            "size": "mega",
 
-            class_contents = []
+            "body": {
+                "type": "box",
+                "layout": "vertical",
+                "spacing": "sm",
 
-            for item in chunk:
+                "contents": [
 
-                command_text = (
-                    f"{item['project']}/"
-                    f"{item['label']}/"
-                    f"{item['resize_width']}x"
-                    f"{item['resize_height']}"
-                )
+                    {
+                        "type": "text",
+                        "text": item["project"],
+                        "weight": "bold",
+                        "size": "lg"
+                    },
 
-                class_contents.append({
+                    {
+                        "type": "text",
+                        "text": f"Class : {item['label']}"
+                    },
 
-                    "type": "box",
+                    {
+                        "type": "text",
+                        "text": f"Mode : {item['mode']}"
+                    },
 
-                    "layout": "vertical",
+                    {
+                        "type": "text",
+                        "text": (
+                            f"Size : "
+                            f"{item['resize_width']}x"
+                            f"{item['resize_height']}"
+                        )
+                    },
 
-                    "margin": "md",
+                    {
+                        "type": "text",
+                        "text": (
+                            f"Images : "
+                            f"{item['total_images']}"
+                        )
+                    }
+                ]
+            },
 
-                    "spacing": "sm",
+            "footer": {
+                "type": "box",
+                "layout": "vertical",
 
-                    "contents": [
+                "contents": [
+                    {
+                        "type": "button",
 
-                        {
-                            "type": "text",
-                            "text": f"CLASS {item['label']}",
-                            "weight": "bold",
-                            "size": "sm"
-                        },
+                        "style": "primary",
 
-                        {
-                            "type": "text",
-                            "text":
-                                f"{item['resize_width']}x"
-                                f"{item['resize_height']}",
-                            "size": "xs"
-                        },
+                        "action": {
+                            "type": "message",
 
-                        {
-                            "type": "text",
-                            "text":
-                                f"{item['total_images']} images",
-                            "size": "xs"
-                        },
+                            "label": "Select",
 
-                        {
-                            "type": "button",
-
-                            "height": "sm",
-
-                            "action": {
-                                "type": "message",
-                                "label": "Select",
-                                "text": command_text
-                            }
-                        },
-
-                        {
-                            "type": "separator",
-                            "margin": "md"
+                            "text": command_text
                         }
-                    ]
-                })
-
-            bubble = {
-
-                "type": "bubble",
-
-                "size": "mega",
-
-                "header": {
-
-                    "type": "box",
-
-                    "layout": "vertical",
-
-                    "contents": [
-
-                        {
-                            "type": "text",
-
-                            "text": project_name,
-
-                            "weight": "bold",
-
-                            "size": "lg"
-                        }
-                    ]
-                },
-
-                "body": {
-
-                    "type": "box",
-
-                    "layout": "vertical",
-
-                    "contents": class_contents
-                }
+                    }
+                ]
             }
+        }
 
-            bubbles.append(bubble)
-
-    bubbles = bubbles[:10]
+        bubbles.append(bubble)
 
     return {
         "type": "flex",
@@ -660,6 +612,7 @@ def build_project_all_flex_grouped(all_classes):
 
         "contents": {
             "type": "carousel",
+
             "contents": bubbles
         }
     }
