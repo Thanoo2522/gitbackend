@@ -424,7 +424,198 @@ def reply_message(reply_token, payload):
     r = requests.post(url, headers=headers, data=json.dumps(data), timeout=30)
     print("REPLY STATUS =", r.status_code)
     return r
-        
+#=====================================================
+# def build_project_all_flex(all_classes):
+
+    bubbles = []
+
+    for item in all_classes[:10]:
+
+        command_text = (
+            f"{item['project']}/"
+            f"{item['label']}/"
+            f"{item['resize_width']}x"
+            f"{item['resize_height']}"
+        )
+
+        bubble = {
+            "type": "bubble",
+            "size": "mega",
+
+            "body": {
+                "type": "box",
+                "layout": "vertical",
+                "spacing": "sm",
+
+                "contents": [
+
+                    {
+                        "type": "text",
+                        "text": item["project"],
+                        "weight": "bold",
+                        "size": "lg"
+                    },
+
+                    {
+                        "type": "text",
+                        "text": f"Class : {item['label']}"
+                    },
+
+                    {
+                        "type": "text",
+                        "text": f"Mode : {item['mode']}"
+                    },
+
+                    {
+                        "type": "text",
+                        "text": (
+                            f"Size : "
+                            f"{item['resize_width']}x"
+                            f"{item['resize_height']}"
+                        )
+                    },
+
+                    {
+                        "type": "text",
+                        "text": (
+                            f"Images : "
+                            f"{item['total_images']}"
+                        )
+                    }
+                ]
+            },
+
+            "footer": {
+                "type": "box",
+                "layout": "vertical",
+
+                "contents": [
+                    {
+                        "type": "button",
+
+                        "style": "primary",
+
+                        "action": {
+                            "type": "message",
+
+                            "label": "Select",
+
+                            "text": command_text
+                        }
+                    }
+                ]
+            }
+        }
+
+        bubbles.append(bubble)
+
+    return {
+        "type": "flex",
+
+        "altText": "Dataset Classes",
+
+        "contents": {
+            "type": "carousel",
+
+            "contents": bubbles
+        }
+    } 
+#==============================================     
+def build_project_all_flex(all_classes):
+
+    bubbles = []
+
+    for item in all_classes[:10]:
+
+        command_text = (
+            f"{item['project']}/"
+            f"{item['label']}/"
+            f"{item['resize_width']}x"
+            f"{item['resize_height']}"
+        )
+
+        bubble = {
+            "type": "bubble",
+            "size": "mega",
+
+            "body": {
+                "type": "box",
+                "layout": "vertical",
+                "spacing": "sm",
+
+                "contents": [
+
+                    {
+                        "type": "text",
+                        "text": item["project"],
+                        "weight": "bold",
+                        "size": "lg"
+                    },
+
+                    {
+                        "type": "text",
+                        "text": f"Class : {item['label']}"
+                    },
+
+                    {
+                        "type": "text",
+                        "text": f"Mode : {item['mode']}"
+                    },
+
+                    {
+                        "type": "text",
+                        "text": (
+                            f"Size : "
+                            f"{item['resize_width']}x"
+                            f"{item['resize_height']}"
+                        )
+                    },
+
+                    {
+                        "type": "text",
+                        "text": (
+                            f"Images : "
+                            f"{item['total_images']}"
+                        )
+                    }
+                ]
+            },
+
+            "footer": {
+                "type": "box",
+                "layout": "vertical",
+
+                "contents": [
+                    {
+                        "type": "button",
+
+                        "style": "primary",
+
+                        "action": {
+                            "type": "message",
+
+                            "label": "Select",
+
+                            "text": command_text
+                        }
+                    }
+                ]
+            }
+        }
+
+        bubbles.append(bubble)
+
+    return {
+        "type": "flex",
+
+        "altText": "Dataset Classes",
+
+        "contents": {
+            "type": "carousel",
+
+            "contents": bubbles
+        }
+    }
 #=====================================================
 @app.route("/main-route", methods=["POST"])
 def main_route():
@@ -522,20 +713,13 @@ def main_route():
                         len(all_classes)
                     )
 
-                    msg = []
-
-                    for item in all_classes:
-
-                        msg.append(
-                            f"{item['project']} | "
-                            f"{item['label']} | "
-                            f"{item['resize_width']}x{item['resize_height']} | "
-                            f"{item['total_images']}"
-                        )
+                    flex_payload = build_project_all_flex(
+                        all_classes
+                    )
 
                     reply_message(
                         reply_token,
-                        "\n".join(msg[:5])
+                        flex_payload
                     )
 
                     return jsonify({
