@@ -612,6 +612,7 @@ def build_project_all_flex_grouped(all_classes):
 
                         {
                             "type": "separator",
+                            "color":"#FF0000",
                             "margin": "md"
                         }
                     ]
@@ -625,7 +626,7 @@ def build_project_all_flex_grouped(all_classes):
                     "styles": {
 
                                 "header": {
-                                            "backgroundColor": "#FF0000"
+                                            "backgroundColor": "#FFFFFF"
                                           },
 
                                 "body": {
@@ -645,7 +646,7 @@ def build_project_all_flex_grouped(all_classes):
                             "type": "text",
 
                             "text": project_name,
-
+                                  
                             "weight": "bold",
 
                             "size": "lg"
