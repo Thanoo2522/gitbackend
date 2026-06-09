@@ -275,34 +275,27 @@ def register_user():
 
         print("REGISTER BODY =", body)
 
-        user_id = body.get("user_id")
+        deviceId = body.get("deviceId")
 
-        if not user_id:
+        if not deviceId:
 
             return jsonify({
 
                 "status": "error",
 
-                "message": "no user_id"
+                "message": "no deviceId"
 
             }), 400
 
-        # ====================================
-        # SAVE USER
-        # ====================================
-
         worker_db.collection("user") \
-            .document(user_id) \
+            .document(deviceId) \
             .set({
 
-                "userId":
-                    user_id,
+                "deviceId":
+                    deviceId,
 
                 "fullname":
                     body.get("name", ""),
-
-                "phone":
-                    body.get("phone", ""),
 
                 "email":
                     body.get("email", ""),
