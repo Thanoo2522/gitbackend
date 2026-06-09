@@ -332,7 +332,149 @@ def register_user():
         }), 500
 
  #=====================================
- 
+ # =========================================================
+# CREATE PROJECT  
+# =========================================================
+@app.route("/create_project", methods=["POST"])
+def create_project():
+
+    try:
+
+        data = request.get_json()
+
+        device_id = data.get("deviceId", "").strip()
+        project_name = data.get("project", "").strip()
+        class_name = data.get("className", "").strip()
+
+        resize_width = int(
+            data.get("resize_width", 224)
+        )
+
+        resize_height = int(
+            data.get("resize_height", 224)
+        )
+
+        # -----------------------------
+        # Validation
+        # -----------------------------
+        if not device_id:
+            return jsonify({
+                "success": False,
+                "message": "deviceId missing"
+            }), 400
+
+        if not project_name:
+            return jsonify({
+                "success": False,
+                "message": "project missing"
+            }), 400
+
+        if not class_name:
+            return jsonify({
+                "success": False,
+                "message": "className missing"
+            }), 400
+
+        # -----------------------------
+        # Storage Path
+        # deviceId/project/class
+        # -----------------------------
+        folder_path = (
+            f"{device_id}/"
+            f"{project_name}/"
+            f"{class_name}"
+        )
+
+        # -----------------------------
+        # Count Images
+        # Firebase Storage
+        # -----------------------------
+        total_images = 0
+
+        blobs = bucket.list_blobs(
+            prefix=folder_path + "/"
+        )
+
+        for blob in blobs:
+
+            name = blob.name.lower()
+
+            if (
+                name.endswith(".jpg")
+                or name.endswith(".jpeg")
+                or name.endswith(".png")
+                or name.endswith(".webp")
+            ):
+                total_images += 1
+
+        # -----------------------------
+        # Firestore
+        # user/deviceId/
+        # dataset_session/project/
+        # class/className
+        # -----------------------------
+        doc_ref = (
+            worker_db
+            .collection("user")
+            .document(device_id)
+            .collection("dataset_session")
+            .document(project_name)
+            .collection("class")
+            .document(class_name)
+        )
+
+        doc_ref.set({
+
+            "label":
+                class_name,
+
+            "project":
+                project_name,
+
+            "resize_height":
+                resize_height,
+
+            "resize_width":
+                resize_width,
+
+            "total_images":
+                total_images,
+
+            "updated_at":
+                firestore.SERVER_TIMESTAMP
+
+        })
+
+        return jsonify({
+
+            "success": True,
+
+            "message":
+                "Project created",
+
+            "deviceId":
+                device_id,
+
+            "project":
+                project_name,
+
+            "class":
+                class_name
+
+        })
+
+    except Exception as ex:
+
+        traceback.print_exc()
+
+        return jsonify({
+
+            "success": False,
+
+            "message":
+                str(ex)
+
+        }), 500
 #=====================================================
 @app.route("/main-route", methods=["POST"])
 def main_route():
