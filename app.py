@@ -227,16 +227,16 @@ def check_register():
             silent=True
         ) or {}
 
-        user_id = body.get("user_id")
+        deviceId = body.get("deviceId")
 
-        if not user_id:
+        if not deviceId:
 
             return jsonify({
                 "registered": False
             })
 
         doc = worker_db.collection("user") \
-            .document(user_id) \
+            .document(deviceId) \
             .get()
 
         if not doc.exists:
