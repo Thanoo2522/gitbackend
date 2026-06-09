@@ -44,9 +44,7 @@ WORKER_FIREBASE_KEY = os.environ.get(
     "WORKER_FIREBASE_KEY"
 )
 
-LINE_CHANNEL_ACCESS_TOKEN = os.environ.get(
-    "LINE_CHANNEL_ACCESS_TOKEN"
-)
+ 
 
 SERVER_ID = os.environ.get(
     "SERVER_ID"
@@ -56,7 +54,7 @@ WORKER_WEBHOOK_URL = os.environ.get(
     "WORKER_WEBHOOK_URL"
 )
 
-LIFF_ID = os.environ.get("LIFF_ID")
+ 
 
 # =========================================================
 # VALIDATION
@@ -68,16 +66,14 @@ required_env = {
 
     "WORKER_FIREBASE_KEY":
         WORKER_FIREBASE_KEY,
-
-    "LINE_CHANNEL_ACCESS_TOKEN":
-        LINE_CHANNEL_ACCESS_TOKEN,
+ 
 
     "SERVER_ID":
         SERVER_ID,
 
     "WORKER_WEBHOOK_URL":
-        WORKER_WEBHOOK_URL,
-    "LIFF_ID": LIFF_ID   
+        WORKER_WEBHOOK_URL
+     
 }
 
 for k, v in required_env.items():
@@ -137,26 +133,7 @@ bucket = storage.bucket(
     app=worker_app
 )
 
-# =========================================================
-# LINE API
-# =========================================================
-LINE_REPLY_API = (
-    "https://api.line.me/v2/bot/message/reply"
-)
-
-LINE_PUSH_API = (
-    "https://api.line.me/v2/bot/message/push"
-)
-
-LINE_HEADERS = {
-
-    "Authorization":
-        f"Bearer {LINE_CHANNEL_ACCESS_TOKEN}",
-
-    "Content-Type":
-        "application/json"
-}
-
+ 
 # =========================================================
 # HEARTBEAT LOOP กระตุ้กไปที่ HUB  ให้รู้ว่ายังonline อยู่
 # =========================================================
@@ -362,322 +339,7 @@ def register_user():
         }), 500
 
  #=====================================
-def push_message(user_id, text):
-
-    try:
-
-        requests.post(
-
-            LINE_PUSH_API,
-
-            headers=LINE_HEADERS,
-
-            json={
-
-                "to":
-                    user_id,
-
-                "messages": [
-                    {
-                        "type": "text",
-                        "text": text
-                    }
-                ]
-            },
-
-            timeout=10
-        )
-
-    except Exception as e:
-
-        print("push error:", e)
-#=========================================
-def reply_message(reply_token, payload):
-    """
-    ฟังก์ชันส่งข้อความกลับไปยัง LINE รองรับทั้งแบบ String ข้อความธรรมดา 
-    และแบบ Dictionary (สำหรับ Flex Message)
-    """
-    url = "https://api.line.me/v2/bot/message/reply"
-    headers = {
-        "Content-Type": "application/json",
-        "Authorization": f"Bearer {LINE_CHANNEL_ACCESS_TOKEN}"
-    }
-    
-    # ถ้า payload ส่งมาเป็นข้อความธรรมดา (String)
-    if isinstance(payload, str):
-        messages = [{
-            "type": "text",
-            "text": payload
-        }]
-    # ถ้า payload ส่งมาเป็นโครงสร้าง Flex Message (Dict)
-    elif isinstance(payload, dict):
-        messages = [payload]
-    else:
-        print("Invalid payload type")
-        return
-
-    data = {
-        "replyToken": reply_token,
-        "messages": messages
-    }
-    
-    r = requests.post(url, headers=headers, data=json.dumps(data), timeout=30)
-    print("REPLY STATUS =", r.status_code)
-    return r
-#=====================================================
-# def build_project_all_flex(all_classes):
-
-    bubbles = []
-
-    for item in all_classes[:10]:
-
-        command_text = (
-            f"{item['project']}/"
-            f"{item['label']}/"
-            f"{item['resize_width']}x"
-            f"{item['resize_height']}"
-        )
-
-        bubble = {
-            "type": "bubble",
-            "size": "mega",
-
-            "body": {
-                "type": "box",
-                "layout": "vertical",
-                "spacing": "sm",
-
-                "contents": [
-
-                    {
-                        "type": "text",
-                        "text": item["project"],
-                        "weight": "bold",
-                        "size": "lg"
-                    },
-
-                    {
-                        "type": "text",
-                        "text": f"Class : {item['label']}"
-                    },
-
-                    {
-                        "type": "text",
-                        "text": f"Mode : {item['mode']}"
-                    },
-
-                    {
-                        "type": "text",
-                        "text": (
-                            f"Size : "
-                            f"{item['resize_width']}x"
-                            f"{item['resize_height']}"
-                        )
-                    },
-
-                    {
-                        "type": "text",
-                        "text": (
-                            f"Images : "
-                            f"{item['total_images']}"
-                        )
-                    }
-                ]
-            },
-
-            "footer": {
-                "type": "box",
-                "layout": "vertical",
-
-                "contents": [
-                    {
-                        "type": "button",
-
-                        "style": "primary",
-
-                        "action": {
-                            "type": "message",
-
-                            "label": "Select",
-
-                            "text": command_text
-                        }
-                    }
-                ]
-            }
-        }
-
-        bubbles.append(bubble)
-
-    return {
-        "type": "flex",
-
-        "altText": "Dataset Classes",
-
-        "contents": {
-            "type": "carousel",
-
-            "contents": bubbles
-        }
-    } 
-#==============================================     
-def build_project_all_flex_grouped(all_classes):
-
-    projects = {}
-
-    for item in all_classes:
-
-        project_name = item["project"]
-
-        if project_name not in projects:
-            projects[project_name] = []
-
-        projects[project_name].append(item)
-
-    bubbles = []
-
-    for project_name, classes in projects.items():
-
-        chunks = [
-            classes[i:i + 4]
-            for i in range(
-                0,
-                len(classes),
-                4
-            )
-        ]
-
-        for chunk in chunks:
-
-            class_contents = []
-
-            for item in chunk:
-
-                command_text = (
-                    f"{item['project']}/"
-                    f"{item['label']}/"
-                    f"{item['resize_width']}x"
-                    f"{item['resize_height']}"
-                )
-
-                class_contents.append({
-
-                    "type": "box",
-
-                    "layout": "vertical",
-
-                    "margin": "md",
-
-                    "spacing": "sm",
-
-                    "contents": [
-
-                        {
-                            "type": "text",
-                            "text": f"CLASS {item['label']}",
-                            "weight": "bold",
-                            "size": "sm"
-                        },
-
-                        {
-                            "type": "text",
-                            "text":
-                                f"{item['resize_width']}x"
-                                f"{item['resize_height']}",
-                            "size": "xs"
-                        },
-
-                        {
-                            "type": "text",
-                            "text":
-                                f"{item['total_images']} images",
-                            "size": "xs"
-                        },
-
-                        {
-                                "type": "button",
-
-                                "style": "primary",
-
-                                "color": "#00C300",
-
-                                  "height": "sm",
-
-                            "action": {
-                                "type": "message",
-                                "label": "Select",
-                                "text": command_text
-                            }
-                        },
-
-                        {
-                            "type": "separator",
-                            "color":"#FF0000",
-                            "margin": "md"
-                        }
-                    ]
-                })
-
-            bubble = {
-
-                "type": "bubble",
-
-                "size": "mega",
-                    "styles": {
-
-                                "header": {
-                                            "backgroundColor": "#FFFFFF"
-                                          },
-
-                                "body": {
-                                            "backgroundColor": "#FFF5F5"
-                                       }
-                                },
-
-                "header": {
-
-                    "type": "box",
-
-                    "layout": "vertical",
-
-                    "contents": [
-
-                        {
-                            "type": "text",
-
-                            "text": project_name,
-                                  
-                            "weight": "bold",
-
-                            "size": "lg"
-                        }
-                    ]
-                },
-
-                "body": {
-
-                    "type": "box",
-
-                    "layout": "vertical",
-
-                    "contents": class_contents
-                }
-            }
-
-            bubbles.append(bubble)
-
-    bubbles = bubbles[:10]
-
-    return {
-        "type": "flex",
-
-        "altText": "Dataset Classes",
-
-        "contents": {
-            "type": "carousel",
-            "contents": bubbles
-        }
-    }
+ 
 #=====================================================
 @app.route("/main-route", methods=["POST"])
 def main_route():
@@ -714,70 +376,7 @@ def main_route():
                 user_ref = worker_db.collection("user").document(user_id)
                 session_ref = user_ref.collection("dataset_session").document(user_id)
 
-                # =========================================
-                # COMMAND: "project all" (สร้าง Flex Carousel 4x10)
-                # =========================================
-                if text.strip().lower() == "project all":
-
-                    all_classes = []
-
-                    project_docs = user_ref.collection(
-                        "dataset_session"
-                    ).stream()
-
-                    for p_doc in project_docs:
-
-                        proj_name = p_doc.id
-
-                        print("PROJECT =", proj_name)
-
-                        class_docs = (
-                            user_ref
-                            .collection("dataset_session")
-                            .document(proj_name)
-                            .collection("class")
-                            .stream()
-                        )
-
-                        for c_doc in class_docs:
-
-                            c_data = c_doc.to_dict() or {}
-
-                            all_classes.append({
-                                "project": c_data.get(
-                                    "project",
-                                    proj_name
-                                ),
-                                "label": c_data.get(
-                                    "label",
-                                    c_doc.id
-                                ),
-                                "mode": c_data.get(
-                                    "mode",
-                                    "universal"
-                                ),
-                                "resize_width": c_data.get(
-                                    "resize_width",
-                                    224
-                                ),
-                                "resize_height": c_data.get(
-                                    "resize_height",
-                                    224
-                                ),
-                                "total_images": c_data.get(
-                                    "total_images",
-                                    0
-                                )
-                            })
-
-                    print("TOTAL CLASSES =", len(all_classes))
-
-                    flex_payload = build_project_all_flex_grouped(all_classes)
-
-                    reply_message(reply_token, flex_payload)
-
-                    return jsonify({"status": "success"})                     
-                    
+ 
                 # =========================================
                 # DOWNLOAD
                 # =========================================
@@ -786,88 +385,8 @@ def main_route():
                     return download_dataset(event, parts)
 
                 # =========================================
-                # RESET SESSION
-                # =========================================
-                if text.lower() == "reset":
-                    session_ref.delete()
-                    reply_message(reply_token, "ล้าง session แล้ว")
-                    return jsonify({"status": "success"})
-
-                # =========================================
-                # SHOW SESSION
-                # =========================================
-                if text.lower() == "session":
-                    session_doc = session_ref.get()
-                    if not session_doc.exists:
-                        reply_message(reply_token, "ไม่มี session")
-                        return jsonify({"status": "error"})
-
-                    data = session_doc.to_dict()
-                    reply_message(
-                        reply_token,
-                        f"PROJECT: {data.get('project')}\n"
-                        f"CLASS: {data.get('label')}\n"
-                        f"SIZE: {data.get('resize_width')}x{data.get('resize_height')}"
-                    )
-                    return jsonify({"status": "success"})
-
-                # =========================================
-                # FORMAT: project/class/230x230
-                # =========================================
-                path_parts = text.split("/")
-                if len(path_parts) < 3:
-                    reply_message(
-                        reply_token,
-                        "รูปแบบ:\nproject/class/230x230\n\n"
-                        "ตัวอย่าง:\nimagenumber/5/224x224\nplant/rust/640x480"
-                    )
-                    return jsonify({"status": "error"})
-
-                project_name = path_parts[0].strip().lower()
-                class_name = path_parts[1].strip().lower()
-                size_text = path_parts[2].strip().lower()
-
-                if "x" not in size_text:
-                    reply_message(reply_token, "ขนาดผิดรูปแบบ\nเช่น 224x224")
-                    return jsonify({"status": "error"})
-
-                try:
-                    w, h = size_text.split("x")
-                    resize_width = int(w)
-                    resize_height = int(h)
-                except:
-                    reply_message(reply_token, "ขนาดไม่ถูกต้อง\nเช่น 224x224")
-                    return jsonify({"status": "error"})
-
-                if resize_width <= 0 or resize_height <= 0:
-                    reply_message(reply_token, "ขนาดต้องมากกว่า 0")
-                    return jsonify({"status": "error"})
-
-                # =========================================
-                # SAVE SESSION
-                # =========================================
-                session_ref.set({
-                    "project": project_name,
-                    "label": class_name,
-                    "resize_width": resize_width,
-                    "resize_height": resize_height,
-                    "mode": "universal",
-                    "updated_at": datetime.utcnow()
-                })
-                print("SESSION SAVED")
-
-                # =========================================
-                # REPLY
-                # =========================================
-                reply_message(
-                    reply_token,
-                    f"📦 DATASET READY\n\n"
-                    f"PROJECT: {project_name}\n"
-                    f"CLASS: {class_name}\n"
-                    f"SIZE: {resize_width}x{resize_height}\n\n"
-                    f"ส่งรูปได้ต่อเนื่อง"
-                )
-                return jsonify({"status": "success"})
+ 
+   
 
             # =====================================================
             # IMAGE MESSAGE
@@ -903,14 +422,7 @@ def handle_image(event):
         ).document(
             user_id
         ).get()
-
-        if not session_doc.exists:
-            reply_message(
-                reply_token,
-                "กรุณาพิมพ์:\n"
-                "project/class/224x224"
-            )
-            return jsonify({"status": "error"})
+ 
 
         session_data = session_doc.to_dict()
 
@@ -921,38 +433,8 @@ def handle_image(event):
         resize_width = int(session_data.get("resize_width", 224))
         resize_height = int(session_data.get("resize_height", 224))
 
-        print("PROJECT =", project_name)
-        print("LABEL =", label_name)
-        print("SIZE =", resize_width, resize_height)
-
-        # ====================================
-        # GET IMAGE FROM LINE
-        # ====================================
-        message_id = message.get("id")
-        image_url = f"https://api-data.line.me/v2/bot/message/{message_id}/content"
-
-        print("DOWNLOAD IMAGE")
-        r = requests.get(
-            image_url,
-            headers={"Authorization": f"Bearer {LINE_CHANNEL_ACCESS_TOKEN}"},
-            timeout=30
-        )
-
-        print("LINE STATUS =", r.status_code)
-        if r.status_code != 200:
-            reply_message(
-                reply_token,
-                f"โหลดรูปไม่สำเร็จ\nSTATUS: {r.status_code}"
-            )
-            return jsonify({"status": "error"})
-
-        # ====================================
-        # OPEN IMAGE
-        # ====================================
-        image = Image.open(BytesIO(r.content))
-        image = image.convert("RGB")
-
-        # ====================================
+ 
+       # ====================================
         # RESIZE
         # ====================================
         image = image.resize((resize_width, resize_height))
@@ -1052,27 +534,13 @@ def handle_image(event):
         if os.path.exists(temp_path):
             os.remove(temp_path)
 
-        # ====================================
-        # REPLY
-        # ====================================
-        reply_message(
-            reply_token,
-            f"บันทึกรูปสำเร็จ\n\n"
-            f"PROJECT: {project_name}\n"
-            f"CLASS: {label_name}\n"
-            f"SIZE: {resize_width}x{resize_height}\n"
-            f"TOTAL: {total_images}\n\n"
-            f"ส่งรูปต่อได้"
-        )
+ 
 
         return jsonify({"status": "success"})
 
     except Exception as e:
         traceback.print_exc()
-        reply_message(
-            event.get("replyToken"),
-            f"ERROR\n{str(e)}"
-        )
+ 
         return jsonify({
             "status": "error",
             "message": str(e)
@@ -1094,23 +562,7 @@ def download_dataset(event, parts):
         )
 
         # ====================================
-        # VALIDATE
-        # ====================================
-
-        if len(parts) < 2:
-
-            reply_message(
-
-                reply_token,
-
-                "รูปแบบ:\n"
-                "download meter\n"
-                "download meter water"
-            )
-
-            return jsonify({
-                "status": "error"
-            })
+ 
 
         # ====================================
         # PROJECT
@@ -1175,23 +627,7 @@ def download_dataset(event, parts):
         print("TOTAL FILES =", len(blobs))
 
         # ====================================
-        # EMPTY
-        # ====================================
-
-        if len(blobs) == 0:
-
-            reply_message(
-
-                reply_token,
-
-                f"ไม่พบ dataset\n\n"
-                f"{storage_prefix}"
-            )
-
-            return jsonify({
-                "status": "error"
-            })
-
+ 
         # ====================================
         # ZIP NAME
         # ====================================
@@ -1296,21 +732,7 @@ def download_dataset(event, parts):
         # ====================================
         # REPLY
         # ====================================
-
-        reply_message(
-
-            reply_token,
-
-            f"DOWNLOAD READY\n\n"
-
-            f"PROJECT: {project_name}\n"
-
-            f"MODE: {label_name}\n"
-
-            f"FILES: {len(blobs)}\n\n"
-
-            f"{zip_url}"
-        )
+ 
 
         return jsonify({
             "status": "success"
@@ -1319,15 +741,7 @@ def download_dataset(event, parts):
     except Exception as e:
 
         traceback.print_exc()
-
-        reply_message(
-
-            event.get(
-                "replyToken"
-            ),
-
-            f"DOWNLOAD ERROR\n\n{str(e)}"
-        )
+ 
 
         return jsonify({
 
@@ -1431,44 +845,11 @@ def worker_webhook():
                     })
 
                 # COMMANDS
-                if text.lower() == "ping":
-
-                    reply_message(
-                        reply_token,
-                        "pong"
-                    )
-
-                elif text.lower() == "profile":
-
-                    reply_message(
-
-                        reply_token,
-
-                        f"ชื่อ: {fullname}\n"
-                        f"USER: {user_id}\n"
-                        f"WORKER: {SERVER_ID}"
-                    )
-
-                else:
-
-                    reply_message(
-
-                        reply_token,
-
-                        f"สวัสดี {fullname}\n\n"
-                        f"คุณพิมพ์: {text}"
-                    )
-
+ 
             # ====================================
             # FOLLOW EVENT
             # ====================================
-
-            elif event_type == "follow":
-
-                push_message(
-                    user_id,
-                    "ยินดีต้อนรับ"
-                )
+ 
 
         return jsonify({
             "status": "success"
