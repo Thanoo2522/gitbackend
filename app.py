@@ -476,7 +476,7 @@ def create_project():
 
         }), 500
 #====================================================
-@app.route("/get_projects", methods=["POST"])
+ @app.route("/get_projects", methods=["POST"])
 def get_projects():
 
     try:
@@ -496,34 +496,16 @@ def get_projects():
 
         for project_doc in projects:
 
-            project_data = project_doc.to_dict()
+            item = project_doc.to_dict()
 
-            project_name = project_data.get(
-                "project",
-                project_doc.id
-            )
-
-            classes = (
-                worker_db
-                .collection("user")
-                .document(device_id)
-                .collection("dataset_session")
-                .document(project_doc.id)
-                .collection("class")
-                .stream()
-            )
-
-            for class_doc in classes:
-
-                item = class_doc.to_dict()
-
-                result.append({
-                    "project": project_name,
-                    "label": item.get("label", ""),
-                    "resize_width": item.get("resize_width", 0),
-                    "resize_height": item.get("resize_height", 0),
-                    "total_images": item.get("total_images", 0)
-                })
+            result.append({
+                "project": project_doc.id,
+                "label": item.get("label", ""),
+                "resize_width": item.get("resize_width", 0),
+                "resize_height": item.get("resize_height", 0),
+                "total_images": item.get("total_images", 0),
+                "updated_at": str(item.get("updated_at", ""))
+            })
 
         return jsonify({
             "success": True,
@@ -535,7 +517,9 @@ def get_projects():
         return jsonify({
             "success": False,
             "message": str(ex)
-        }), 500    
+        }), 500
+ 
+    
 #=====================================================
 @app.route("/main-route", methods=["POST"])
 def main_route():
