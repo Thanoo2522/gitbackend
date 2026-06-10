@@ -408,12 +408,32 @@ def create_project():
                 total_images += 1
 
         # -----------------------------
-        # Firestore
-        # user/deviceId/
-        # dataset_session/project/
-        # class/className
+        # Create Project Document
+        # user/deviceId/dataset_session/project
         # -----------------------------
-        doc_ref = (
+        project_ref = (
+            worker_db
+            .collection("user")
+            .document(device_id)
+            .collection("dataset_session")
+            .document(project_name)
+        )
+
+        project_ref.set({
+
+            "project":
+                project_name,
+
+            "created_at":
+                firestore.SERVER_TIMESTAMP
+
+        }, merge=True)
+
+        # -----------------------------
+        # Create Class Document
+        # user/deviceId/dataset_session/project/class/className
+        # -----------------------------
+        class_ref = (
             worker_db
             .collection("user")
             .document(device_id)
@@ -423,7 +443,7 @@ def create_project():
             .document(class_name)
         )
 
-        doc_ref.set({
+        class_ref.set({
 
             "label":
                 class_name,
@@ -459,7 +479,10 @@ def create_project():
                 project_name,
 
             "class":
-                class_name
+                class_name,
+
+            "total_images":
+                total_images
 
         })
 
