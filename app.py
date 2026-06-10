@@ -1,4 +1,6 @@
 #from click import command
+from pydoc import doc
+
 from flask import Flask, request, jsonify
 from flask import render_template
  
@@ -342,18 +344,23 @@ def get_projects():
 
     device_id = data["deviceId"]
 
-    doc = (
+    projects = (
         worker_db
         .collection("user")
         .document(device_id)
         .collection("dataset_session")
-        .document("image color")
-        .collection("class")
-        .document("red")
-        .get()
+        .stream()
     )
 
-    return jsonify(doc.to_dict())   
+    result = []
+
+    for project_doc in projects:
+
+        print("PROJECT =", project_doc.id)
+
+        result.append(project_doc.id)
+
+    return jsonify(result)  
 #=====================================================
 @app.route("/main-route", methods=["POST"])
 def main_route():
