@@ -475,7 +475,7 @@ def create_project():
                 str(ex)
 
         }), 500
-#====================================================
+#===============================================
 @app.route("/get_projects", methods=["POST"])
 def get_projects():
 
