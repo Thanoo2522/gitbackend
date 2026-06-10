@@ -479,70 +479,22 @@ def create_project():
 @app.route("/get_projects", methods=["POST"])
 def get_projects():
 
-    try:
+    data = request.get_json()
 
-        data = request.get_json()
+    device_id = data["deviceId"]
 
-        device_id = data["deviceId"]
+    docs = (
+        worker_db
+        .collection("user")
+        .stream()
+    )
 
-        result = []
+    result = []
 
-        projects = (
-            worker_db
-            .collection("user")
-            .document(device_id)
-            .collection("dataset_session")
-            .stream()
-        )
+    for doc in docs:
+        result.append(doc.id)
 
-        for project_doc in projects:
-
-            project_name = project_doc.id
-
-            classes = (
-                worker_db
-                .collection("user")
-                .document(device_id)
-                .collection("dataset_session")
-                .document(project_name)
-                .collection("class")
-                .stream()
-            )
-
-            for class_doc in classes:
-
-                item = class_doc.to_dict()
-
-                result.append({
-
-                    "project":
-                        item.get("project", ""),
-
-                    "label":
-                        item.get("label", ""),
-
-                    "resize_width":
-                        item.get("resize_width", 0),
-
-                    "resize_height":
-                        item.get("resize_height", 0),
-
-                    "total_images":
-                        item.get("total_images", 0)
-
-                })
-
-        return jsonify({
-            "success": True,
-            "data": result
-        })
-
-    except Exception as ex:
-
-        return jsonify({
-            "success": False,
-            "message": str(ex)
-        }), 500    
+    return jsonify(result)   
 #=====================================================
 @app.route("/main-route", methods=["POST"])
 def main_route():
