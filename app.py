@@ -476,7 +476,7 @@ def create_project():
 
         }), 500
 #====================================================
-# @app.route("/get_projects", methods=["POST"])
+@app.route("/get_projects", methods=["POST"])
 def get_projects():
 
     try:
