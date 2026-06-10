@@ -496,16 +496,30 @@ def get_projects():
 
         for project_doc in projects:
 
-            item = project_doc.to_dict()
+            project_name = project_doc.id
 
-            result.append({
-                "project": project_doc.id,
-                "label": item.get("label", ""),
-                "resize_width": item.get("resize_width", 0),
-                "resize_height": item.get("resize_height", 0),
-                "total_images": item.get("total_images", 0),
-                "updated_at": str(item.get("updated_at", ""))
-            })
+            classes = (
+                worker_db
+                .collection("user")
+                .document(device_id)
+                .collection("dataset_session")
+                .document(project_name)
+                .collection("class")
+                .stream()
+            )
+
+            for class_doc in classes:
+
+                item = class_doc.to_dict()
+
+                result.append({
+                    "project": item.get("project", project_name),
+                    "label": item.get("label", ""),
+                    "resize_width": item.get("resize_width", 0),
+                    "resize_height": item.get("resize_height", 0),
+                    "total_images": item.get("total_images", 0),
+                    "updated_at": str(item.get("updated_at", ""))
+                })
 
         return jsonify({
             "success": True,
