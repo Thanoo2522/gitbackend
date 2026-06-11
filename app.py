@@ -556,7 +556,95 @@ def get_projects():
             "message": str(ex)
         }), 500
  
-    
+#======================================================
+@app.route("/upload_dataset_image", methods=["POST"])
+def upload_dataset_image():
+
+    try:
+
+        data = request.get_json()
+
+        device_id = data["deviceId"]
+        project = data["project"]
+        label = data["label"]
+        image_base64 = data["image"]
+
+        # ----------------------------
+        # decode base64
+        # ----------------------------
+        image_bytes = base64.b64decode(image_base64)
+
+        # ----------------------------
+        # unique filename
+        # ----------------------------
+        image_id = str(uuid.uuid4())
+
+        storage_path = (
+            f"{device_id}/"
+            f"{project}/"
+            f"{label}/"
+            f"{image_id}.jpg"
+        )
+
+        # ----------------------------
+        # upload firebase storage
+        # ----------------------------
+        blob = bucket.blob(storage_path)
+
+        blob.upload_from_string(
+            image_bytes,
+            content_type="image/jpeg"
+        )
+
+        # ----------------------------
+        # firestore update
+        # ----------------------------
+
+
+        class_ref = (
+            worker_db
+            .collection("user")
+            .document(device_id)
+            .collection("dataset_session")
+            .document(project)
+            .collection("class")
+            .document(label)
+        )
+
+        class_ref.update({
+            "total_images":
+                firestore.Increment(1),
+
+            "updated_at":
+                firestore.SERVER_TIMESTAMP
+        })
+               #----------------------------
+        image_ref = (
+                    class_ref
+                    .collection("images")
+                    .document(image_id)
+                    )
+
+        image_ref.set({ "image_id": image_id,
+                        "storage_path": storage_path,
+                            "status": "active",
+                            "source": "mobile",
+                         "created_at": firestore.SERVER_TIMESTAMP
+                        })
+
+        return jsonify({
+            "status": "success",
+            "storage_path": storage_path
+        })
+
+    except Exception as e:
+
+        traceback.print_exc()
+
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500   
 #=====================================================
 @app.route("/main-route", methods=["POST"])
 def main_route():
