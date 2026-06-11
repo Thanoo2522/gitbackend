@@ -663,6 +663,8 @@ def upload_dataset_image():
             "status": "active",
 
              "source": "mobile",
+             "width": resize_width,
+            "height": resize_height,
 
             "created_at":
                 firestore.SERVER_TIMESTAMP
