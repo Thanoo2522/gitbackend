@@ -569,38 +569,9 @@ def upload_dataset_image():
         label = data["label"]
         image_base64 = data["image"]
 
-        # ----------------------------
-        # decode base64
-        # ----------------------------
-        image_bytes = base64.b64decode(image_base64)
-
-        # ----------------------------
-        # unique filename
-        # ----------------------------
-        image_id = str(uuid.uuid4())
-
-        storage_path = (
-            f"{device_id}/"
-            f"{project}/"
-            f"{label}/"
-            f"{image_id}.jpg"
-        )
-
-        # ----------------------------
-        # upload firebase storage
-        # ----------------------------
-        blob = bucket.blob(storage_path)
-
-        blob.upload_from_string(
-            image_bytes,
-            content_type="image/jpeg"
-        )
-
-        # ----------------------------
-        # firestore update
-        # ----------------------------
-
-
+        # --------------------------
+        # class document
+        # --------------------------
         class_ref = (
             worker_db
             .collection("user")
@@ -611,29 +582,111 @@ def upload_dataset_image():
             .document(label)
         )
 
+        class_doc = class_ref.get()
+
+        if not class_doc.exists:
+
+            return jsonify({
+                "status": "error",
+                "message": "class not found"
+            }), 404
+
+        class_data = class_doc.to_dict()
+
+        resize_width = class_data["resize_width"]
+        resize_height = class_data["resize_height"]
+
+        # --------------------------
+        # decode image
+        # --------------------------
+        image_bytes = base64.b64decode(
+            image_base64
+        )
+
+        image = Image.open(
+            BytesIO(image_bytes)
+        )
+
+        # --------------------------
+        # resize
+        # --------------------------
+        image = image.resize(
+            (resize_width, resize_height)
+        )
+
+        buffer = BytesIO()
+
+        image.save(
+            buffer,
+            format="JPEG",
+            quality=90
+        )
+
+        resized_bytes = buffer.getvalue()
+
+        # --------------------------
+        # filename
+        # --------------------------
+        image_id = str(uuid.uuid4())
+
+        storage_path = (
+            f"{device_id}/"
+            f"{project}/"
+            f"{label}/"
+            f"{image_id}.jpg"
+        )
+
+        # --------------------------
+        # upload storage
+        # --------------------------
+        blob = bucket.blob(storage_path)
+
+        blob.upload_from_string(
+            resized_bytes,
+            content_type="image/jpeg"
+        )
+
+        # --------------------------
+        # image metadata
+        # --------------------------
+        image_ref = (
+            class_ref
+            .collection("images")
+            .document(image_id)
+        )
+
+        image_ref.set({
+
+            "image_id": image_id,
+
+            "storage_path": storage_path,
+            "status": "active",
+
+             "source": "mobile",
+
+            "created_at":
+                firestore.SERVER_TIMESTAMP
+        })
+
+        # --------------------------
+        # update counter
+        # --------------------------
         class_ref.update({
+
             "total_images":
                 firestore.Increment(1),
 
             "updated_at":
                 firestore.SERVER_TIMESTAMP
         })
-               #----------------------------
-        image_ref = (
-                    class_ref
-                    .collection("images")
-                    .document(image_id)
-                    )
-
-        image_ref.set({ "image_id": image_id,
-                        "storage_path": storage_path,
-                            "status": "active",
-                            "source": "mobile",
-                         "created_at": firestore.SERVER_TIMESTAMP
-                        })
 
         return jsonify({
+
             "status": "success",
+
+            "image_id": image_id,
+            "status": "success",
+
             "storage_path": storage_path
         })
 
