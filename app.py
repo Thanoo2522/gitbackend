@@ -700,6 +700,142 @@ def upload_dataset_image():
             "status": "error",
             "message": str(e)
         }), 500   
+#======================================================
+@app.route("/train_dataset", methods=["POST"])
+def train_dataset():
+
+    try:
+
+        data = request.get_json()
+
+        device_id = data["deviceId"]
+        project = data["project"]
+
+        # ----------------------------------
+        # create training job
+        # ----------------------------------
+        job_ref = (
+            worker_db
+            .collection("user")
+            .document(device_id)
+            .collection("training_jobs")
+            .document()
+        )
+
+        job_ref.set({
+            "project": project,
+            "status": "generating_csv",
+            "progress": 0,
+            "created_at": firestore.SERVER_TIMESTAMP
+        })
+
+        job_id = job_ref.id
+
+        # ----------------------------------
+        # project doc
+        # ----------------------------------
+        project_ref = (
+            worker_db
+            .collection("user")
+            .document(device_id)
+            .collection("dataset_session")
+            .document(project)
+        )
+
+        # ----------------------------------
+        # read classes
+        # ----------------------------------
+        class_docs = (
+            project_ref
+            .collection("class")
+            .stream()
+        )
+
+        csv_lines = [
+            "image,label"
+        ]
+
+        total_images = 0
+
+        for class_doc in class_docs:
+
+            class_name = class_doc.id
+
+            image_docs = (
+                project_ref
+                .collection("class")
+                .document(class_name)
+                .collection("images")
+                .stream()
+            )
+
+            for image_doc in image_docs:
+
+                image_data = image_doc.to_dict()
+
+                storage_path = image_data["storage_path"]
+
+                csv_lines.append(
+                    f"{storage_path},{class_name}"
+                )
+
+                total_images += 1
+
+        # ----------------------------------
+        # create csv
+        # ----------------------------------
+        csv_content = "\n".join(csv_lines)
+
+        csv_path = (
+            f"training_jobs/"
+            f"{device_id}/"
+            f"{job_id}/"
+            f"dataset.csv"
+        )
+
+        blob = bucket.blob(csv_path)
+
+        blob.upload_from_string(
+            csv_content,
+            content_type="text/csv"
+        )
+
+        # ----------------------------------
+        # update job
+        # ----------------------------------
+        job_ref.update({
+
+            "status": "csv_ready",
+
+            "progress": 100,
+
+            "total_images": total_images,
+
+            "csv_path": csv_path,
+
+            "updated_at":
+                firestore.SERVER_TIMESTAMP
+        })
+
+        return jsonify({
+
+            "status": "success",
+
+            "job_id": job_id,
+
+            "total_images": total_images,
+
+            "csv_path": csv_path
+        })
+
+    except Exception as e:
+
+        traceback.print_exc()
+
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500    
 #=====================================================
 @app.route("/main-route", methods=["POST"])
 def main_route():
