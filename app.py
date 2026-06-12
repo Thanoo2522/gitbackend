@@ -22,6 +22,8 @@ import base64
 import zipfile
 #------------- เกี่ยวกับ AI Model
 import numpy as np
+
+from datetime import timedelta
  
 # =========================================================
 # FLASK
@@ -752,7 +754,7 @@ def train_dataset():
         )
 
         csv_lines = [
-            "image,label"
+            "gcs_uri,label"
         ]
 
         total_images = 0
@@ -776,7 +778,7 @@ def train_dataset():
                 storage_path = image_data["storage_path"]
 
                 csv_lines.append(
-                    f"{storage_path},{class_name}"
+                     f"gs://basework-51f3b.firebasestorage.app/{storage_path},{class_name}"
                 )
 
                 total_images += 1
@@ -835,7 +837,54 @@ def train_dataset():
         return jsonify({
             "status": "error",
             "message": str(e)
-        }), 500    
+        }), 500   
+
+#======================================================
+@app.route("/download_csv", methods=["POST"])
+def download_csv():
+
+    try:
+
+        data = request.get_json()
+
+        device_id = data["deviceId"]
+        job_id = data["jobId"]
+
+        csv_path = (
+            f"training_jobs/"
+            f"{device_id}/"
+            f"{job_id}/"
+            f"dataset.csv"
+        )
+
+        blob = bucket.blob(csv_path)
+
+        if not blob.exists():
+
+            return jsonify({
+                "status": "error",
+                "message": "CSV not found"
+            }), 404
+
+        download_url = blob.generate_signed_url(
+            version="v4",
+            expiration=timedelta(hours=1),
+            method="GET"
+        )
+
+        return jsonify({
+            "status": "success",
+            "download_url": download_url
+        })
+
+    except Exception as e:
+
+        traceback.print_exc()
+
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500         
 #=====================================================
 @app.route("/main-route", methods=["POST"])
 def main_route():
