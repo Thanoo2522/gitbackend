@@ -523,6 +523,15 @@ def get_projects():
 
             project_name = project_doc.id
 
+            project_data = project_doc.to_dict() or {}
+
+            project_item = {
+                "project": project_name,
+                "resize_width": 0,
+                "resize_height": 0,
+                "classes": []
+            }
+
             classes = (
                 worker_db
                 .collection("user")
@@ -533,18 +542,36 @@ def get_projects():
                 .stream()
             )
 
+            first_class = True
+
             for class_doc in classes:
 
-                item = class_doc.to_dict()
+                class_data = class_doc.to_dict()
 
-                result.append({
-                    "project": item.get("project", project_name),
-                    "label": item.get("label", ""),
-                    "resize_width": item.get("resize_width", 0),
-                    "resize_height": item.get("resize_height", 0),
-                    "total_images": item.get("total_images", 0),
-                    "updated_at": str(item.get("updated_at", ""))
+                if first_class:
+                    project_item["resize_width"] = class_data.get(
+                        "resize_width", 0
+                    )
+
+                    project_item["resize_height"] = class_data.get(
+                        "resize_height", 0
+                    )
+
+                    first_class = False
+
+                project_item["classes"].append({
+
+                    "label":
+                        class_data.get("label", ""),
+
+                    "total_images":
+                        class_data.get("total_images", 0),
+
+                    "updated_at":
+                        str(class_data.get("updated_at", ""))
                 })
+
+            result.append(project_item)
 
         return jsonify({
             "success": True,
@@ -886,531 +913,6 @@ def download_csv():
             "message": str(e)
         }), 500         
 #=====================================================
-@app.route("/main-route", methods=["POST"])
-def main_route():
-    try:
-        body = request.get_json(silent=True) or {}
-
-        print("=" * 50)
-        print("MAIN ROUTE")
-        print(json.dumps(body, indent=2, ensure_ascii=False))
-        print("=" * 50)
-
-        events = body.get("events", [])
-
-        for event in events:
-            if event.get("type") != "message":
-                continue
-
-            message = event.get("message", {})
-            message_type = message.get("type")
-
-            # =====================================================
-            # TEXT MESSAGE
-            # =====================================================
-            if message_type == "text":
-                text = message.get("text", "").strip()
-                user_id = event["source"]["userId"]
-                reply_token = event.get("replyToken")
-
-                print("TEXT =", text)
-
-                # =========================================
-                # USER REF
-                # =========================================
-                user_ref = worker_db.collection("user").document(user_id)
-                session_ref = user_ref.collection("dataset_session").document(user_id)
-
- 
-                # =========================================
-                # DOWNLOAD
-                # =========================================
-                if text.lower().startswith("download"):
-                    parts = text.split(" ")
-                    return download_dataset(event, parts)
-
-                # =========================================
- 
-   
-
-            # =====================================================
-            # IMAGE MESSAGE
-            # =====================================================
-            elif message_type == "image":
-                return handle_image(event)
-
-        return jsonify({"status": "success"})
-
-    except Exception as e:
-        traceback.print_exc()
-        return jsonify({
-            "status": "error",
-            "message": str(e)
-        }), 500
-# =========================================================
-def handle_image(event):
-    try:
-        reply_token = event.get("replyToken")
-        source = event.get("source", {})
-        user_id = source.get("userId")
-        message = event.get("message", {})
-
-        # ====================================
-        # GET SESSION
-        # ====================================
-        session_doc = worker_db.collection(
-            "user"
-        ).document(
-            user_id
-        ).collection(
-            "dataset_session"
-        ).document(
-            user_id
-        ).get()
- 
-
-        session_data = session_doc.to_dict()
-
-        project_name = session_data.get("project")
-        label_name = session_data.get("label")       # ค่าตัวอย่างเช่น "1"
-        mode_name = session_data.get("mode", "universal") # ดึงเพิ่มเพื่อเอาไปใส่ใน Path ที่ 2
-
-        resize_width = int(session_data.get("resize_width", 224))
-        resize_height = int(session_data.get("resize_height", 224))
-
- 
-       # ====================================
-        # RESIZE
-        # ====================================
-        image = image.resize((resize_width, resize_height))
-
-        # ====================================
-        # FILE NAME
-        # ====================================
-        filename = str(uuid.uuid4()) + ".jpg"
-        temp_path = f"/tmp/{filename}"
-        image.save(temp_path, format="JPEG")
-        print("IMAGE SAVED =", temp_path)
-
-        # ====================================
-        # STORAGE PATH
-        # ====================================
-        storage_path = f"{user_id}/{project_name}/{label_name}/{filename}"
-        print("STORAGE PATH =", storage_path)
-
-        # ====================================
-        # UPLOAD STORAGE
-        # ====================================
-        blob = bucket.blob(storage_path)
-        blob.upload_from_filename(temp_path, content_type="image/jpeg")
-        blob.make_public()
-        public_url = blob.public_url
-        print("UPLOAD SUCCESS:", public_url)
-
-        # ====================================
-        # COUNT IMAGES FROM STORAGE
-        # ====================================
-        storage_prefix = f"{user_id}/{project_name}/{label_name}/"
-        blobs = list(bucket.list_blobs(prefix=storage_prefix))
-        blobs = [b for b in blobs if not b.name.endswith("/")]
-        total_images = len(blobs)
-        print("TOTAL IMAGES =", total_images)
-
-        # ====================================
-        # WRITE / UPDATE TO NEW FIRESTORE PATHS
-        # ====================================
-        timestamp_now = firestore.SERVER_TIMESTAMP
-
-        # ปลายทางที่ 1
-        active_session_ref = worker_db.collection("user").document(user_id)\
-                                      .collection("active_session").document(project_name)
-
-        active_session_data = {
-            "label": label_name,
-            "resize_height": resize_height,
-            "resize_width": resize_width,
-            "total_images": total_images,
-            "updated_at": timestamp_now
-        }
-
-        active_session_ref.set(active_session_data, merge=True)
-
-        # ====================================
-        # สร้าง document project ให้มีตัวตนจริง
-        # ====================================
-        dataset_project_ref = worker_db.collection("user")\
-                                       .document(user_id)\
-                                       .collection("dataset_session")\
-                                       .document(project_name)
-
-        dataset_project_ref.set({
-            "project": project_name,
-            "updated_at": timestamp_now
-        }, merge=True)
-
-        # ====================================
-        # ปลายทางที่ 2
-        # ====================================
-        dataset_class_ref = worker_db.collection("user")\
-                                     .document(user_id)\
-                                     .collection("dataset_session")\
-                                     .document(project_name)\
-                                     .collection("class")\
-                                     .document(label_name)
-
-        dataset_class_data = {
-            "label": label_name,
-            "mode": mode_name,
-            "project": project_name,
-            "resize_height": resize_height,
-            "resize_width": resize_width,
-            "total_images": total_images,
-            "updated_at": timestamp_now
-        }
-
-        dataset_class_ref.set(
-            dataset_class_data,
-            merge=True
-        )
-
-        # ====================================
-        # DELETE TEMP
-        # ====================================
-        if os.path.exists(temp_path):
-            os.remove(temp_path)
-
- 
-
-        return jsonify({"status": "success"})
-
-    except Exception as e:
-        traceback.print_exc()
- 
-        return jsonify({
-            "status": "error",
-            "message": str(e)
-        }), 500
- #=======================================   
-def download_dataset(event, parts):
-
-    try:
-
-        reply_token = event.get(
-            "replyToken"
-        )
-
-        user_id = event.get(
-            "source",
-            {}
-        ).get(
-            "userId"
-        )
-
-        # ====================================
- 
-
-        # ====================================
-        # PROJECT
-        # ====================================
-
-        project_name = parts[1].lower()
-
-        # ====================================
-        # FULL PROJECT
-        # ====================================
-
-        if len(parts) == 2:
-
-            label_name = "ALL"
-
-            storage_prefix = (
-
-                f"{user_id}/"
-                f"{project_name}/"
-            )
-
-        # ====================================
-        # SINGLE LABEL
-        # ====================================
-
-        else:
-
-            label_name = parts[2].lower()
-
-            storage_prefix = (
-
-                f"{user_id}/"
-                f"{project_name}/"
-                f"{label_name}/"
-            )
-
-        print("=" * 50)
-        print("DOWNLOAD DATASET")
-        print("USER =", user_id)
-        print("PREFIX =", storage_prefix)
-        print("=" * 50)
-
-        # ====================================
-        # GET FILES
-        # ====================================
-
-        blobs = list(
-
-            bucket.list_blobs(
-                prefix=storage_prefix
-            )
-        )
-
-        # FILTER FOLDER
-
-        blobs = [
-
-            b for b in blobs
-            if not b.name.endswith("/")
-        ]
-
-        print("TOTAL FILES =", len(blobs))
-
-        # ====================================
- 
-        # ====================================
-        # ZIP NAME
-        # ====================================
-
-        zip_filename = (
-
-            f"{project_name}_"
-            f"{label_name}.zip"
-        )
-
-        zip_temp_path = (
-            f"/tmp/{zip_filename}"
-        )
-
-        # ====================================
-        # CREATE ZIP
-        # ====================================
-
-        with zipfile.ZipFile(
-
-            zip_temp_path,
-
-            "w",
-
-            zipfile.ZIP_DEFLATED
-
-        ) as zipf:
-
-            for blob in blobs:
-
-                filename = os.path.basename(
-                    blob.name
-                )
-
-                if not filename:
-                    continue
-
-                temp_file = (
-                    f"/tmp/{filename}"
-                )
-
-                blob.download_to_filename(
-                    temp_file
-                )
-
-                # IMPORTANT
-                zipf.write(
-
-                    temp_file,
-
-                    arcname=blob.name.replace(
-                        f"{user_id}/",
-                        ""
-                    )
-                )
-
-                if os.path.exists(
-                    temp_file
-                ):
-
-                    os.remove(
-                        temp_file
-                    )
-
-        # ====================================
-        # UPLOAD ZIP
-        # ====================================
-
-        zip_storage_path = (
-
-            f"{user_id}/downloads/"
-            f"{zip_filename}"
-        )
-
-        zip_blob = bucket.blob(
-            zip_storage_path
-        )
-
-        zip_blob.upload_from_filename(
-
-            zip_temp_path,
-
-            content_type="application/zip"
-        )
-
-        zip_blob.make_public()
-
-        zip_url = zip_blob.public_url
-
-        # ====================================
-        # DELETE TEMP
-        # ====================================
-
-        if os.path.exists(
-            zip_temp_path
-        ):
-
-            os.remove(
-                zip_temp_path
-            )
-
-        # ====================================
-        # REPLY
-        # ====================================
- 
-
-        return jsonify({
-            "status": "success"
-        })
-
-    except Exception as e:
-
-        traceback.print_exc()
- 
-
-        return jsonify({
-
-            "status":
-                "error",
-
-            "message":
-                str(e)
-
-        }), 500 
-# =========================================================
-@app.route("/worker-webhook", methods=["POST"])
-def worker_webhook():
-
-    try:
-
-        body = request.get_json(
-            silent=True
-        ) or {}
-
-        print("=" * 50)
-        print("WORKER WEBHOOK")
-        print(json.dumps(
-            body,
-            indent=2,
-            ensure_ascii=False
-        ))
-        print("=" * 50)
-
-        events = body.get("events", [])
-
-        for event in events:
-
-            event_type = event.get("type")
-
-            reply_token = event.get(
-                "replyToken"
-            )
-
-            source = event.get(
-                "source",
-                {}
-            )
-
-            user_id = source.get(
-                "userId"
-            )
-
-            if not user_id:
-                continue
-
-            # ====================================
-            # GET USER
-            # ====================================
-
-            user_doc = worker_db.collection("user") \
-                .document(user_id) \
-                .get()
-
-            if not user_doc.exists:
-                continue
-
-            user_data = user_doc.to_dict()
-
-            fullname = user_data.get(
-                "fullname",
-                "Unknown"
-            )
-
-            # ====================================
-            # MESSAGE EVENT
-            # ====================================
-
-            if event_type == "message":
-
-                text = event.get(
-                    "message",
-                    {}
-                ).get(
-                    "text",
-                    ""
-                )
-
-                print("TEXT =", text)
-
-                # SAVE CHAT LOG
-                worker_db.collection("chat_logs") \
-                    .add({
-
-                        "user_id":
-                            user_id,
-
-                        "fullname":
-                            fullname,
-
-                        "text":
-                            text,
-
-                        "timestamp":
-                            datetime.utcnow()
-                    })
-
-                # COMMANDS
- 
-            # ====================================
-            # FOLLOW EVENT
-            # ====================================
- 
-
-        return jsonify({
-            "status": "success"
-        })
-
-    except Exception as e:
-
-        traceback.print_exc()
-
-        return jsonify({
-
-            "status": "error",
-
-            "message": str(e)
-
-        }), 500 
  
 # =========================================================
 # RUN
