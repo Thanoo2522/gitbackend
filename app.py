@@ -527,12 +527,8 @@ def get_projects():
             project_item = {
 
                 "project": project_name,
-                "resize_width": project_data.get(
-                    "resize_width", 0
-                ),
-                "resize_height": project_data.get(
-                    "resize_height", 0
-                ),
+                "resize_width": 0,
+                "resize_height": 0,
                 "created_at": str(
                     project_data.get("created_at", "")
                 ),
@@ -551,10 +547,24 @@ def get_projects():
             )
 
             total_project_images = 0
+            first_class = True
 
             for class_doc in classes:
 
                 class_data = class_doc.to_dict() or {}
+
+                # ใช้ Class ตัวแรกเป็นค่า Pixel ของ Project
+                if first_class:
+
+                    project_item["resize_width"] = class_data.get(
+                        "resize_width", 0
+                    )
+
+                    project_item["resize_height"] = class_data.get(
+                        "resize_height", 0
+                    )
+
+                    first_class = False
 
                 total_images = class_data.get(
                     "total_images", 0
@@ -564,19 +574,19 @@ def get_projects():
 
                 project_item["classes"].append({
 
+                    "project": project_name,
+
                     "label": class_data.get(
                         "label",
                         class_doc.id
                     ),
 
                     "resize_width": class_data.get(
-                        "resize_width",
-                        project_item["resize_width"]
+                        "resize_width", 0
                     ),
 
                     "resize_height": class_data.get(
-                        "resize_height",
-                        project_item["resize_height"]
+                        "resize_height", 0
                     ),
 
                     "total_images": total_images,
