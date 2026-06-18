@@ -559,17 +559,15 @@ def get_projects():
 
                     first_class = False
 
-                project_item["classes"].append({
+            project_item["classes"].append({
 
-                    "label":
-                        class_data.get("label", ""),
-
-                    "total_images":
-                        class_data.get("total_images", 0),
-
-                    "updated_at":
-                        str(class_data.get("updated_at", ""))
-                })
+                                "project": project_name,
+                                "label": class_data.get("label", ""),
+                                "resize_width":        class_data.get("resize_width", 0),
+                                "resize_height":        class_data.get("resize_height", 0),
+                                "total_images":        class_data.get("total_images", 0),
+                                "updated_at":        str(class_data.get("updated_at", ""))
+                                        })
 
             result.append(project_item)
 
