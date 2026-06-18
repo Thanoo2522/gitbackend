@@ -522,14 +522,22 @@ def get_projects():
         for project_doc in projects:
 
             project_name = project_doc.id
-
             project_data = project_doc.to_dict() or {}
 
             project_item = {
+
                 "project": project_name,
-                "resize_width": 0,
-                "resize_height": 0,
+                "resize_width": project_data.get(
+                    "resize_width", 0
+                ),
+                "resize_height": project_data.get(
+                    "resize_height", 0
+                ),
+                "created_at": str(
+                    project_data.get("created_at", "")
+                ),
                 "classes": []
+
             }
 
             classes = (
@@ -542,45 +550,71 @@ def get_projects():
                 .stream()
             )
 
-            first_class = True
+            total_project_images = 0
 
             for class_doc in classes:
 
-                class_data = class_doc.to_dict()
+                class_data = class_doc.to_dict() or {}
 
-                if first_class:
-                    project_item["resize_width"] = class_data.get(
-                        "resize_width", 0
+                total_images = class_data.get(
+                    "total_images", 0
+                )
+
+                total_project_images += total_images
+
+                project_item["classes"].append({
+
+                    "label": class_data.get(
+                        "label",
+                        class_doc.id
+                    ),
+
+                    "resize_width": class_data.get(
+                        "resize_width",
+                        project_item["resize_width"]
+                    ),
+
+                    "resize_height": class_data.get(
+                        "resize_height",
+                        project_item["resize_height"]
+                    ),
+
+                    "total_images": total_images,
+
+                    "updated_at": str(
+                        class_data.get(
+                            "updated_at",
+                            ""
+                        )
                     )
 
-                    project_item["resize_height"] = class_data.get(
-                        "resize_height", 0
-                    )
+                })
 
-                    first_class = False
+            project_item["total_classes"] = len(
+                project_item["classes"]
+            )
 
-            project_item["classes"].append({
-
-                                "project": project_name,
-                                "label": class_data.get("label", ""),
-                                "resize_width":        class_data.get("resize_width", 0),
-                                "resize_height":        class_data.get("resize_height", 0),
-                                "total_images":        class_data.get("total_images", 0),
-                                "updated_at":        str(class_data.get("updated_at", ""))
-                                        })
+            project_item["total_images"] = (
+                total_project_images
+            )
 
             result.append(project_item)
 
         return jsonify({
+
             "success": True,
+            "count": len(result),
             "data": result
+
         })
 
     except Exception as ex:
 
         return jsonify({
+
             "success": False,
             "message": str(ex)
+
         }), 500
  
 #======================================================
