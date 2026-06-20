@@ -24,14 +24,14 @@ import zipfile
 import numpy as np
 
 from datetime import timedelta
- 
+from flask_cors import CORS
 
 import tensorflow as tf 
 # =========================================================
 # FLASK
 # =========================================================
 app = Flask(__name__)
- 
+CORS(app)
  # =========================================================
 # HEARTBEAT STATE
 # =========================================================
