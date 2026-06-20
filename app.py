@@ -24,14 +24,14 @@ import zipfile
 import numpy as np
 
 from datetime import timedelta
-from flask_cors import CORS
+#from flask_cors import CORS
 
 import tensorflow as tf 
 # =========================================================
 # FLASK
 # =========================================================
 app = Flask(__name__)
-CORS(app)
+#CORS(app)
  # =========================================================
 # HEARTBEAT STATE
 # =========================================================
@@ -57,8 +57,6 @@ interpreter.allocate_tensors()
 
 input_details = interpreter.get_input_details()
 output_details = interpreter.get_output_details()
-print(input_details)
-print(output_details)
 # =========================================================
 # ENV
 # =========================================================
@@ -176,15 +174,14 @@ def predict():
             BytesIO(image_bytes)
         ).convert("RGB")
 
-        # Resize ตามโมเดล
-        image = image.resize((224, 224))
+        image = image.resize(
+            (224, 224)
+        )
 
         img = np.array(
             image,
-            dtype=np.float32
+            dtype=np.uint8
         )
-
-        img = img / 255.0
 
         img = np.expand_dims(
             img,
@@ -202,11 +199,36 @@ def predict():
             output_details[0]["index"]
         )
 
-        prediction = output.tolist()
+        score0 = int(output[0][0])
+        score1 = int(output[0][1])
+
+        red_percent = (
+            score0 / 255.0
+        ) * 100.0
+
+        yellow_percent = (
+            score1 / 255.0
+        ) * 100.0
+
+        if score0 > score1:
+            label = "red_cap"
+            confidence = red_percent
+        else:
+            label = "yellow_cap"
+            confidence = yellow_percent
 
         return jsonify({
+
             "success": True,
-            "prediction": prediction
+
+            "label": label,
+
+            "confidence":
+                round(confidence, 1),
+
+            "score0": score0,
+
+            "score1": score1
         })
 
     except Exception as e:
@@ -214,9 +236,12 @@ def predict():
         traceback.print_exc()
 
         return jsonify({
+
             "success": False,
+
             "error": str(e)
-        })
+
+        }), 500
 # =========================================================
 # HEARTBEAT LOOP กระตุ้กไปที่ HUB  ให้รู้ว่ายังonline อยู่
 # =========================================================
