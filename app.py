@@ -25,7 +25,8 @@ import numpy as np
 
 from datetime import timedelta
  
- 
+
+import tensorflow as tf 
 # =========================================================
 # FLASK
 # =========================================================
@@ -36,6 +37,28 @@ app = Flask(__name__)
 # =========================================================
 heartbeat_started = False
 
+# ==================================================
+# Load Model
+# ==================================================
+BASE_DIR = os.path.dirname(
+    os.path.abspath(__file__)
+)
+
+MODEL_PATH = os.path.join(
+    BASE_DIR,
+    "model.tflite"
+)
+
+interpreter = tf.lite.Interpreter(
+    model_path=MODEL_PATH
+)
+
+interpreter.allocate_tensors()
+
+input_details = interpreter.get_input_details()
+output_details = interpreter.get_output_details()
+print(input_details)
+print(output_details)
 # =========================================================
 # ENV
 # =========================================================
@@ -135,8 +158,65 @@ worker_db = firestore.client(
 bucket = storage.bucket(
     app=worker_app
 )
+# =========================================================
+@app.route("/predict", methods=["POST"])
+def predict():
 
- 
+    try:
+
+        data = request.get_json()
+
+        image_b64 = data["image"]
+
+        image_bytes = base64.b64decode(
+            image_b64
+        )
+
+        image = Image.open(
+            BytesIO(image_bytes)
+        ).convert("RGB")
+
+        # Resize ตามโมเดล
+        image = image.resize((224, 224))
+
+        img = np.array(
+            image,
+            dtype=np.float32
+        )
+
+        img = img / 255.0
+
+        img = np.expand_dims(
+            img,
+            axis=0
+        )
+
+        interpreter.set_tensor(
+            input_details[0]["index"],
+            img
+        )
+
+        interpreter.invoke()
+
+        output = interpreter.get_tensor(
+            output_details[0]["index"]
+        )
+
+        prediction = output.tolist()
+
+        return jsonify({
+            "success": True,
+            "prediction": prediction
+        })
+
+    except Exception as e:
+
+        traceback.print_exc()
+
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        })
 # =========================================================
 # HEARTBEAT LOOP กระตุ้กไปที่ HUB  ให้รู้ว่ายังonline อยู่
 # =========================================================
