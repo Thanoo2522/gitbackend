@@ -185,10 +185,16 @@ def predict():
             (224, 224)
         )
 
+        # --------------------
+        # FLOAT32 MODEL
+        # --------------------
+
         img = np.array(
             image,
-            dtype=np.uint8
+            dtype=np.float32
         )
+
+        img = img / 255.0
 
         img = np.expand_dims(
             img,
@@ -206,23 +212,38 @@ def predict():
             output_details[0]["index"]
         )
 
-        score0 = int(output[0][0])
-        score1 = int(output[0][1])
+        score0 = float(output[0][0])
+        score1 = float(output[0][1])
+        score2 = float(output[0][2])
 
-        red_percent = (
-            score0 / 255.0
-        ) * 100.0
+        # --------------------
+        # LABELS
+        # --------------------
 
-        yellow_percent = (
-            score1 / 255.0
-        ) * 100.0
+        labels = [
+            "class0",
+            "class1",
+            "class2"
+        ]
 
-        if score0 > score1:
-            label = "red_cap"
-            confidence = red_percent
-        else:
-            label = "yellow_cap"
-            confidence = yellow_percent
+        scores = [
+            score0,
+            score1,
+            score2
+        ]
+
+        best_index = int(
+            np.argmax(scores)
+        )
+
+        label = labels[
+            best_index
+        ]
+
+        confidence = (
+            scores[best_index]
+            * 100.0
+        )
 
         return jsonify({
 
@@ -231,11 +252,31 @@ def predict():
             "label": label,
 
             "confidence":
-                round(confidence, 1),
+                round(
+                    confidence,
+                    1
+                ),
 
-            "score0": score0,
+            "scores": {
+                "score0":
+                    round(
+                        score0,
+                        4
+                    ),
 
-            "score1": score1
+                "score1":
+                    round(
+                        score1,
+                        4
+                    ),
+
+                "score2":
+                    round(
+                        score2,
+                        4
+                    )
+            }
+
         })
 
     except Exception as e:
