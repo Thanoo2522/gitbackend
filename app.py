@@ -584,7 +584,7 @@ def create_project():
 
         data = request.get_json()
 
-        device_id = data.get("deviceId", "").strip()
+        email = (   data.get("email", "")  .lower()   .strip())
         project_name = data.get("project", "").strip()
         class_name = data.get("className", "").strip()
 
@@ -599,11 +599,12 @@ def create_project():
         # -----------------------------
         # Validation
         # -----------------------------
-        if not device_id:
-            return jsonify({
-                "success": False,
-                "message": "deviceId missing"
-            }), 400
+        if not email:
+
+                return jsonify({
+               "success": False,
+              "message": "email missing"
+               }), 400
 
         if not project_name:
             return jsonify({
@@ -622,10 +623,10 @@ def create_project():
         # deviceId/project/class
         # -----------------------------
         folder_path = (
-            f"{device_id}/"
-            f"{project_name}/"
-            f"{class_name}"
-        )
+              f"{email}/"
+                 f"{project_name}/"
+                 f"{class_name}"
+                    )
 
         # -----------------------------
         # Count Images
@@ -656,7 +657,7 @@ def create_project():
         project_ref = (
             worker_db
             .collection("user")
-            .document(device_id)
+            .document(email)
             .collection("dataset_session")
             .document(project_name)
         )
@@ -678,7 +679,7 @@ def create_project():
         class_ref = (
             worker_db
             .collection("user")
-            .document(device_id)
+            .document(email)
             .collection("dataset_session")
             .document(project_name)
             .collection("class")
@@ -713,9 +714,8 @@ def create_project():
 
             "message":
                 "Project created",
-
-            "deviceId":
-                device_id,
+            "email":
+                     email,
 
             "project":
                 project_name,
@@ -746,15 +746,30 @@ def get_projects():
 
     try:
 
-        data = request.get_json()
-        device_id = data["deviceId"]
+        data = request.get_json() or {}
+
+        email = (
+            data.get("email", "")
+            .lower()
+            .strip()
+        )
+
+        if not email:
+
+            return jsonify({
+
+                "success": False,
+
+                "message": "no email"
+
+            }), 400
 
         result = []
 
         projects = (
             worker_db
             .collection("user")
-            .document(device_id)
+            .document(email)
             .collection("dataset_session")
             .stream()
         )
@@ -770,7 +785,9 @@ def get_projects():
                 "resize_width": 0,
                 "resize_height": 0,
                 "created_at": str(
-                    project_data.get("created_at", "")
+                    project_data.get(
+                        "created_at", ""
+                    )
                 ),
                 "classes": []
 
@@ -779,7 +796,7 @@ def get_projects():
             classes = (
                 worker_db
                 .collection("user")
-                .document(device_id)
+                .document(email)
                 .collection("dataset_session")
                 .document(project_name)
                 .collection("class")
@@ -791,78 +808,107 @@ def get_projects():
 
             for class_doc in classes:
 
-                class_data = class_doc.to_dict() or {}
+                class_data = (
+                    class_doc.to_dict()
+                    or {}
+                )
 
-                # ใช้ Class ตัวแรกเป็นค่า Pixel ของ Project
                 if first_class:
 
-                    project_item["resize_width"] = class_data.get(
+                    project_item[
+                        "resize_width"
+                    ] = class_data.get(
                         "resize_width", 0
                     )
 
-                    project_item["resize_height"] = class_data.get(
+                    project_item[
+                        "resize_height"
+                    ] = class_data.get(
                         "resize_height", 0
                     )
 
                     first_class = False
 
-                total_images = class_data.get(
-                    "total_images", 0
+                total_images = (
+                    class_data.get(
+                        "total_images", 0
+                    )
                 )
 
-                total_project_images += total_images
+                total_project_images += (
+                    total_images
+                )
 
-                project_item["classes"].append({
+                project_item[
+                    "classes"
+                ].append({
 
-                    "project": project_name,
+                    "project":
+                        project_name,
 
-                    "label": class_data.get(
-                        "label",
-                        class_doc.id
-                    ),
-
-                    "resize_width": class_data.get(
-                        "resize_width", 0
-                    ),
-
-                    "resize_height": class_data.get(
-                        "resize_height", 0
-                    ),
-
-                    "total_images": total_images,
-
-                    "updated_at": str(
+                    "label":
                         class_data.get(
-                            "updated_at",
-                            ""
+                            "label",
+                            class_doc.id
+                        ),
+
+                    "resize_width":
+                        class_data.get(
+                            "resize_width",
+                            0
+                        ),
+
+                    "resize_height":
+                        class_data.get(
+                            "resize_height",
+                            0
+                        ),
+
+                    "total_images":
+                        total_images,
+
+                    "updated_at":
+                        str(
+                            class_data.get(
+                                "updated_at",
+                                ""
+                            )
                         )
-                    )
 
                 })
 
-            project_item["total_classes"] = len(
+            project_item[
+                "total_classes"
+            ] = len(
                 project_item["classes"]
             )
 
-            project_item["total_images"] = (
-                total_project_images
-            )
+            project_item[
+                "total_images"
+            ] = total_project_images
 
-            result.append(project_item)
+            result.append(
+                project_item
+            )
 
         return jsonify({
 
             "success": True,
+
             "count": len(result),
+
             "data": result
 
         })
 
     except Exception as ex:
 
+        traceback.print_exc()
+
         return jsonify({
 
             "success": False,
+
             "message": str(ex)
 
         }), 500
