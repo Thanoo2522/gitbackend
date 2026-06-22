@@ -429,42 +429,59 @@ def register_user():
             silent=True
         ) or {}
 
-        print("REGISTER BODY =", body)
+        print(
+            "REGISTER BODY =",
+            body
+        )
 
-        deviceId = body.get("deviceId")
+        name = body.get("name", "")
+        email = body.get("email", "").lower().strip()
+        password = body.get("password", "")
 
-        if not deviceId:
+        if not email:
 
             return jsonify({
-
                 "status": "error",
-
-                "message": "no deviceId"
-
+                "message": "no email"
             }), 400
 
-        worker_db.collection("user") \
-            .document(deviceId) \
-            .set({
+        if not password:
 
-                "deviceId":
-                    deviceId,
+            return jsonify({
+                "status": "error",
+                "message": "no password"
+            }), 400
 
-                "fullname":
-                    body.get("name", ""),
+        # เช็คซ้ำ
+        user_ref = (
+            worker_db
+            .collection("user")
+            .document(email)
+        )
 
-                "email":
-                    body.get("email", ""),
+        if user_ref.get().exists:
 
-                "register":
-                    True,
+            return jsonify({
+                "status": "error",
+                "message": "email already exists"
+            }), 400
 
-                "worker_id":
-                    SERVER_ID,
+        user_ref.set({
 
-                "created_at":
-                    datetime.utcnow()
-            })
+            "fullname": name,
+
+            "email": email,
+
+            "password": password,
+
+            "register": True,
+
+            "worker_id": SERVER_ID,
+
+            "created_at":
+                datetime.utcnow()
+
+        })
 
         print("✅ USER SAVED")
 
@@ -472,7 +489,9 @@ def register_user():
 
             "status": "success",
 
-            "message": "ลงทะเบียนสำเร็จ"
+            "message":
+                "ลงทะเบียนสำเร็จ"
+
         })
 
     except Exception as e:
@@ -487,7 +506,74 @@ def register_user():
 
         }), 500
 
- #=====================================
+ # login user
+@app.route("/login-user", methods=["POST"])
+def login_user():
+
+    try:
+
+        body = request.get_json() or {}
+
+        email = (
+            body.get("email", "")
+            .lower()
+            .strip()
+        )
+
+        password = body.get(
+            "password", ""
+        )
+
+        doc = (
+            worker_db
+            .collection("user")
+            .document(email)
+            .get()
+        )
+
+        if not doc.exists:
+
+            return jsonify({
+                "status": "error",
+                "message": "user not found"
+            }), 404
+
+        user = doc.to_dict()
+
+        if (
+            user["password"]
+            != password
+        ):
+
+            return jsonify({
+                "status": "error",
+                "message": "invalid password"
+            }), 401
+
+        return jsonify({
+
+            "status": "success",
+
+            "email":
+                user["email"],
+
+            "fullname":
+                user["fullname"],
+
+            "worker_id":
+                user["worker_id"]
+
+        })
+
+    except Exception as e:
+
+        return jsonify({
+
+            "status": "error",
+
+            "message": str(e)
+
+        }), 500
  # =========================================================
 # CREATE PROJECT  
 # =========================================================
