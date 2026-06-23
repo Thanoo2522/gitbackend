@@ -383,20 +383,18 @@ def check_register():
             silent=True
         ) or {}
 
-        deviceId = body.get("deviceId")
+        email = body.get("email")
 
-        if not deviceId:
-
+        if not email:
             return jsonify({
                 "registered": False
             })
 
         doc = worker_db.collection("user") \
-            .document(deviceId) \
+            .document(email) \
             .get()
 
         if not doc.exists:
-
             return jsonify({
                 "registered": False
             })
@@ -404,9 +402,11 @@ def check_register():
         data = doc.to_dict()
 
         return jsonify({
-
             "registered":
-                data.get("register", False)
+                data.get(
+                    "register",
+                    False
+                )
         })
 
     except Exception:
@@ -416,7 +416,6 @@ def check_register():
         return jsonify({
             "registered": False
         })
-
 # =========================================================
 # REGISTER USER
 # =========================================================
