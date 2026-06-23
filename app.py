@@ -746,7 +746,7 @@ def delete_class():
     try:
         data = request.json
 
-        email = data["deviceId"]
+        email = data["email"]
         project = data["project"]
         className = data["className"]
 
