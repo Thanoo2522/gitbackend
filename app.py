@@ -740,6 +740,34 @@ def create_project():
                 str(ex)
 
         }), 500
+# delete class
+@app.route("/delete_class", methods=["POST"])
+def delete_class():
+    try:
+        data = request.json
+
+        email = data["deviceId"]
+        project = data["project"]
+        className = data["className"]
+
+        doc_ref = worker_db.collection("user") \
+            .document(email) \
+            .collection("dataset_session") \
+            .document(project) \
+            .collection("class") \
+            .document(className)
+
+        doc_ref.delete()
+
+        return jsonify({
+            "status": "ok"
+        })
+
+    except Exception as e:
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        })        
 #===============================================
 @app.route("/get_projects", methods=["POST"])
 def get_projects():
