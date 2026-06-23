@@ -301,6 +301,32 @@ def heartbeat_loop():
 
         try:
 
+            # -------------------------
+            # USER COUNT
+            # -------------------------
+            user_count = 0
+
+            try:
+
+                users = worker_db \
+                    .collection("user") \
+                    .stream()
+
+                user_count = sum(
+                    1 for _ in users
+                )
+
+            except Exception:
+                traceback.print_exc()
+
+            # -------------------------
+            # LOAD SCORE
+            # -------------------------
+            load_score = user_count
+
+            # -------------------------
+            # SAVE HEARTBEAT
+            # -------------------------
             save_data = {
 
                 "server_id":
@@ -309,8 +335,11 @@ def heartbeat_loop():
                 "status":
                     "online",
 
+                "active_users":
+                    user_count,
+
                 "load_score":
-                    0,
+                    load_score,
 
                 "cloud_url":
                     WORKER_WEBHOOK_URL,
@@ -323,17 +352,26 @@ def heartbeat_loop():
                 .document("server_pool") \
                 .collection("servers") \
                 .document(SERVER_ID) \
-                .set(save_data, merge=True)
+                .set(
+                    save_data,
+                    merge=True
+                )
 
-            print("✅ HEARTBEAT OK")
+            print(
+                f"✅ HEARTBEAT OK "
+                f"users={user_count} "
+                f"load={load_score}"
+            )
 
-        except Exception as e:
+        except Exception:
 
-            print("❌ HEARTBEAT ERROR")
+            print(
+                "❌ HEARTBEAT ERROR"
+            )
 
             traceback.print_exc()
 
-        # LOOP EVERY 30 SEC
+        # EVERY 30 SEC
         time.sleep(30)
 
 # =========================================================
