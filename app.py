@@ -118,7 +118,7 @@ for k, v in required_env.items():
 
 # ---------------------------------------------------------
 # HUB DB
-# ---------------------------------------------------------
+# ------------------------------------------- 
 hub_cred = credentials.Certificate(
     json.loads(HUB_FIREBASE_KEY)
 )
@@ -1307,7 +1307,293 @@ def download_csv():
             "message": str(e)
         }), 500         
 #=====================================================
- 
+@app.route(
+    "/upload_dataset_image",
+    methods=["POST"]
+)
+def upload_dataset_image():
+
+    try:
+
+        # ==========================================
+        # Request
+        # ==========================================
+
+        data = request.get_json()
+
+        email = data["email"]
+
+        project = data["project"]
+
+        class_name = data["className"]
+
+        resize_width = int(
+            data["resizeWidth"]
+        )
+
+        resize_height = int(
+            data["resizeHeight"]
+        )
+
+        camera_source = data.get(
+            "cameraSource",
+            "browser"
+        )
+
+        capture_mode = data.get(
+            "captureMode",
+            "single"
+        )
+
+        image_base64 = data["image"]
+
+        # ==========================================
+        # Decode Base64
+        # ==========================================
+
+        if "," in image_base64:
+
+            image_base64 = image_base64.split(",")[1]
+
+        image_bytes = base64.b64decode(
+            image_base64
+        )
+
+        image = Image.open(
+            BytesIO(image_bytes)
+        ).convert("RGB")
+
+        image = image.resize(
+
+            (
+                resize_width,
+                resize_height
+            )
+
+        )
+
+        # ==========================================
+        # Filename
+        # ==========================================
+
+        filename = (
+            f"{uuid.uuid4()}.jpg"
+        )
+
+        storage_path = (
+
+            f"{email}/"
+
+            f"{project}/"
+
+            f"class/"
+
+            f"{class_name}/"
+
+            f"{filename}"
+
+        )
+
+        # ==========================================
+        # Upload Storage
+        # ==========================================
+
+        output = BytesIO()
+
+        image.save(
+
+            output,
+
+            format="JPEG",
+
+            quality=95
+
+        )
+
+        output.seek(0)
+
+        blob = bucket.blob(
+            storage_path
+        )
+
+        blob.upload_from_file(
+
+            output,
+
+            content_type="image/jpeg"
+
+        )
+
+        blob.make_public()
+
+        image_url = blob.public_url
+
+        # ==========================================
+        # Firestore Class Document
+        # ==========================================
+
+        doc = (
+
+            worker_db
+
+            .collection("user")
+
+            .document(email)
+
+            .collection("dataset_session")
+
+            .document(project)
+
+            .collection("class")
+
+            .document(class_name)
+
+        )
+
+        snapshot = doc.get()
+
+        total_images = 0
+
+        if snapshot.exists:
+
+            total_images = (
+
+                snapshot.to_dict()
+
+                .get(
+                    "total_images",
+                    0
+                )
+
+            )
+
+        total_images += 1
+
+        # ==========================================
+        # Update Class
+        # ==========================================
+
+        doc.set(
+
+            {
+
+                "project":
+                    project,
+
+                "label":
+                    class_name,
+
+                "resize_width":
+                    resize_width,
+
+                "resize_height":
+                    resize_height,
+
+                "camera_source":
+                    camera_source,
+
+                "capture_mode":
+                    capture_mode,
+
+                "total_images":
+                    total_images,
+
+                "updated_at":
+                    firestore.SERVER_TIMESTAMP
+
+            },
+
+            merge=True
+
+        )
+
+        # ==========================================
+        # Save Image Document
+        # ==========================================
+
+        doc.collection("images") \
+            .document(
+                filename.replace(".jpg","")
+            ) \
+            .set(
+
+                {
+
+                    "filename":
+                        filename,
+
+                    "imageUrl":
+                        image_url,
+
+                    "storagePath":
+                        storage_path,
+
+                    "width":
+                        resize_width,
+
+                    "height":
+                        resize_height,
+
+                    "camera_source":
+                        camera_source,
+
+                    "capture_mode":
+                        capture_mode,
+
+                    "file_size":
+                        len(image_bytes),
+
+                    "created_at":
+                        firestore.SERVER_TIMESTAMP
+
+                }
+
+            )
+
+        # ==========================================
+        # Response
+        # ==========================================
+
+        return jsonify(
+
+            {
+
+                "status":
+                    "ok",
+
+                "imageUrl":
+                    image_url,
+
+                "filename":
+                    filename,
+
+                "storagePath":
+                    storage_path,
+
+                "totalImages":
+                    total_images
+
+            }
+
+        )
+
+    except Exception as ex:
+
+        traceback.print_exc()
+
+        return jsonify(
+
+            {
+
+                "status":
+                    "error",
+
+                "message":
+                    str(ex)
+
+            }
+
+        ), 500
 # =========================================================
 # RUN
 # ======================================================
