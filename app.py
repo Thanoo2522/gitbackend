@@ -163,7 +163,7 @@ worker_db = firestore.client(
 bucket = storage.bucket(
     app=worker_app
 )
-# ==================================================== 
+# ================================================= 
 @app.route("/predict", methods=["POST"])
 def predict():
 
@@ -446,6 +446,9 @@ def check_register():
                     False
                 )
         })
+
+ 
+        
 
     except Exception:
 
