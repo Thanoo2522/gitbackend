@@ -1170,11 +1170,80 @@ def download_csv():
         return jsonify({
             "status": "error",
             "message": str(e)
-        }), 500         
+        }), 500       
+        #===============================
+def save_image_document(
+
+    email,
+
+    project,
+
+    class_name,
+
+    upload_result,
+
+    width,
+
+    height,
+
+    file_size,
+
+    camera_source,
+
+    capture_mode,
+
+    augmentation="original"
+
+):
+
+    doc_ref = (
+
+        worker_db
+        .collection("user")
+        .document(email)
+        .collection("dataset_session")
+        .document(project)
+        .collection("class")
+        .document(class_name)
+        .collection("images")
+        .document()
+
+    )
+
+    doc_ref.set({
+
+        "filename":
+            upload_result["filename"],
+
+        "storagePath":
+            upload_result["storagePath"],
+
+        "imageUrl":
+            upload_result["imageUrl"],
+
+        "width":
+            width,
+
+        "height":
+            height,
+
+        "file_size":
+            file_size,
+
+        "camera_source":
+            camera_source,
+
+        "capture_mode":
+            capture_mode,
+
+        "augmentation":
+            augmentation,
+
+        "created_at":
+            firestore.SERVER_TIMESTAMP
+
+    })  
          #===================================================  
-  
-
-
 def update_firestore(
 
     email,
@@ -1187,12 +1256,13 @@ def update_firestore(
 
 ):
 
-    # ==========================
-    # Firestore Document
-    # ==========================
+    # =====================================
+    # Class Document
+    # =====================================
+
     doc_ref = (
 
-    worker_db
+        worker_db
         .collection("user")
         .document(email)
         .collection("dataset_session")
@@ -1200,7 +1270,11 @@ def update_firestore(
         .collection("class")
         .document(class_name)
 
-)
+    )
+
+    # =====================================
+    # Read Current Total
+    # =====================================
 
     doc = doc_ref.get()
 
@@ -1208,7 +1282,7 @@ def update_firestore(
 
         current = doc.to_dict()
 
-        total = current.get(
+        total_images = current.get(
 
             "total_images",
 
@@ -1218,9 +1292,13 @@ def update_firestore(
 
     else:
 
-        total = 0
+        total_images = 0
 
-    total += increase
+    total_images += increase
+
+    # =====================================
+    # Update Class
+    # =====================================
 
     doc_ref.set(
 
@@ -1230,7 +1308,7 @@ def update_firestore(
 
             "label": class_name,
 
-            "total_images": total,
+            "total_images": total_images,
 
             "updated_at":
                 firestore.SERVER_TIMESTAMP
@@ -1241,7 +1319,8 @@ def update_firestore(
 
     )
 
-    return total         
+    return total_images
+        
           #===================================================  
 def upload_image(
 
@@ -1267,19 +1346,20 @@ def upload_image(
 
     # ==========================
     # Storage Path
-    # ==========================
-
+    # ==========================   
     storage_path = (
 
-        f"{email}/"
+                 f"{email}/"
 
-        f"{project}/"
+                 f"{project}/"
 
-        f"{class_name}/"
+                f"class/"
 
-        f"{filename}"
+                 f"{class_name}/"
 
-    )
+                 f"{filename}"
+
+               )
 
     # ==========================
     # Convert PIL -> JPEG Bytes
@@ -1680,7 +1760,6 @@ def upload_generator(data):
 
     image_base64 = data["image"]
 
-
     # ==========================
     # Decode
     # ==========================
@@ -1688,7 +1767,6 @@ def upload_generator(data):
     image = decode_base64(
         image_base64
     )
-
 
     # ==========================
     # Resize
@@ -1704,7 +1782,6 @@ def upload_generator(data):
 
     )
 
-
     # ==========================
     # Generate Images
     # ==========================
@@ -1713,15 +1790,35 @@ def upload_generator(data):
         image
     )
 
-
     uploaded_files = []
 
-
     # ==========================
-    # Upload All Images
+    # Upload Images
     # ==========================
 
     for image_type, img in generated_images:
+
+        # ----------------------
+        # File Size
+        # ----------------------
+
+        buffer = io.BytesIO()
+
+        img.save(
+
+            buffer,
+
+            format="JPEG",
+
+            quality=95
+
+        )
+
+        file_size = buffer.tell()
+
+        # ----------------------
+        # Upload Firebase Storage
+        # ----------------------
 
         upload_result = upload_image(
 
@@ -1739,9 +1836,38 @@ def upload_generator(data):
 
         )
 
+        # ----------------------
+        # Save Firestore
+        # ----------------------
+
+        save_image_document(
+
+            email=email,
+
+            project=project,
+
+            class_name=class_name,
+
+            upload_result=upload_result,
+
+            width=resize_width,
+
+            height=resize_height,
+
+            file_size=file_size,
+
+            camera_source=camera_source,
+
+            capture_mode="generator",
+
+            augmentation=image_type
+
+        )
+
         uploaded_files.append({
 
-            "type": image_type,
+            "type":
+                image_type,
 
             "filename":
                 upload_result["filename"],
@@ -1754,9 +1880,8 @@ def upload_generator(data):
 
         })
 
-
     # ==========================
-    # Update Firestore
+    # Update Firestore Summary
     # ==========================
 
     total_images = update_firestore(
@@ -1771,7 +1896,6 @@ def upload_generator(data):
 
     )
 
-
     # ==========================
     # Response
     # ==========================
@@ -1780,11 +1904,11 @@ def upload_generator(data):
 
         "success": True,
 
-        "captureMode": "generator",
+        "captureMode":
+            "generator",
 
-        "generated": len(
-            generated_images
-        ),
+        "generated":
+            len(generated_images),
 
         "cameraSource":
             camera_source,
@@ -1861,8 +1985,8 @@ def upload_burst(data):
 
             camera_source=camera_source,
 
-            image_type=f"burst_{index+1}"
-
+            image_type=f"burst_{index+1}",
+             increase=len(images)
         )
 
         uploaded_files.append({
@@ -1942,7 +2066,7 @@ def upload_single(data):
     image_base64 = data["image"]
 
     # ==========================
-    # Decode Image
+    # Decode
     # ==========================
 
     image = decode_base64(
@@ -1964,7 +2088,25 @@ def upload_single(data):
     )
 
     # ==========================
-    # Upload
+    # Calculate File Size
+    # ==========================
+
+    buffer = io.BytesIO()
+
+    image.save(
+
+        buffer,
+
+        format="JPEG",
+
+        quality=95
+
+    )
+
+    file_size = buffer.tell()
+
+    # ==========================
+    # Upload Firebase Storage
     # ==========================
 
     upload_result = upload_image(
@@ -1984,7 +2126,35 @@ def upload_single(data):
     )
 
     # ==========================
-    # Update Firestore
+    # Save Image Document
+    # ==========================
+
+    save_image_document(
+
+        email=email,
+
+        project=project,
+
+        class_name=class_name,
+
+        upload_result=upload_result,
+
+        width=resize_width,
+
+        height=resize_height,
+
+        file_size=file_size,
+
+        camera_source=camera_source,
+
+        capture_mode="single",
+
+        augmentation="original"
+
+    )
+
+    # ==========================
+    # Update Class Summary
     # ==========================
 
     total_images = update_firestore(
@@ -1993,7 +2163,9 @@ def upload_single(data):
 
         project=project,
 
-        class_name=class_name
+        class_name=class_name,
+
+        increase=1
 
     )
 
@@ -2022,7 +2194,7 @@ def upload_single(data):
         "totalImages":
             total_images
 
-    }   
+    }  
 #=====================================================
 @app.route(
     "/upload_dataset_image",
