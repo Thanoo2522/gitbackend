@@ -1956,12 +1956,18 @@ def upload_burst(data):
 
     for index, image_base64 in enumerate(images):
 
+        # ----------------------
         # Decode
+        # ----------------------
+
         image = decode_base64(
             image_base64
         )
 
+        # ----------------------
         # Resize
+        # ----------------------
+
         image = resize_image(
 
             image,
@@ -1972,7 +1978,28 @@ def upload_burst(data):
 
         )
 
-        # Upload Firebase
+        # ----------------------
+        # Calculate File Size
+        # ----------------------
+
+        buffer = io.BytesIO()
+
+        image.save(
+
+            buffer,
+
+            format="JPEG",
+
+            quality=95
+
+        )
+
+        file_size = buffer.tell()
+
+        # ----------------------
+        # Upload Firebase Storage
+        # ----------------------
+
         upload_result = upload_image(
 
             image=image,
@@ -1985,11 +2012,46 @@ def upload_burst(data):
 
             camera_source=camera_source,
 
-            image_type=f"burst_{index+1}",
-          
+            image_type=f"burst_{index+1}"
+
         )
 
+        # ----------------------
+        # Save Firestore
+        # ----------------------
+
+        save_image_document(
+
+            email=email,
+
+            project=project,
+
+            class_name=class_name,
+
+            upload_result=upload_result,
+
+            width=resize_width,
+
+            height=resize_height,
+
+            file_size=file_size,
+
+            camera_source=camera_source,
+
+            capture_mode="burst",
+
+            augmentation=f"burst_{index+1}"
+
+        )
+
+        # ----------------------
+        # Response List
+        # ----------------------
+
         uploaded_files.append({
+
+            "type":
+                f"burst_{index+1}",
 
             "filename":
                 upload_result["filename"],
@@ -2003,7 +2065,7 @@ def upload_burst(data):
         })
 
     # ==========================
-    # Update Firestore
+    # Update Firestore Summary
     # ==========================
 
     total_images = update_firestore(
@@ -2026,15 +2088,20 @@ def upload_burst(data):
 
         "success": True,
 
-        "captureMode": "burst",
+        "captureMode":
+            "burst",
 
-        "uploaded": len(images),
+        "uploaded":
+            len(images),
 
-        "files": uploaded_files,
+        "cameraSource":
+            camera_source,
 
-        "cameraSource": camera_source,
+        "totalImages":
+            total_images,
 
-        "totalImages": total_images
+        "files":
+            uploaded_files
 
     }    
  #====================================================
