@@ -15,7 +15,11 @@ from datetime import datetime
 
 import firebase_admin
 from firebase_admin import credentials, firestore, storage
-from PIL import Image
+from PIL import (
+    Image,
+    ImageEnhance,
+    ImageChops
+)
 from io import BytesIO
 import uuid
 import base64
@@ -27,6 +31,9 @@ from datetime import timedelta
 from flask_cors import CORS
 
 import tensorflow as tf 
+
+import io
+
 # =========================================================
 # FLASK
 # =========================================================
@@ -1164,6 +1171,858 @@ def download_csv():
             "status": "error",
             "message": str(e)
         }), 500         
+         #===================================================  
+  
+
+
+def update_firestore(
+
+    email,
+
+    project,
+
+    class_name,
+
+    increase=1
+
+):
+
+    # ==========================
+    # Firestore Document
+    # ==========================
+    doc_ref = (
+
+    worker_db
+        .collection("user")
+        .document(email)
+        .collection("dataset_session")
+        .document(project)
+        .collection("class")
+        .document(class_name)
+
+)
+
+    doc = doc_ref.get()
+
+    if doc.exists:
+
+        current = doc.to_dict()
+
+        total = current.get(
+
+            "total_images",
+
+            0
+
+        )
+
+    else:
+
+        total = 0
+
+    total += increase
+
+    doc_ref.set(
+
+        {
+
+            "project": project,
+
+            "label": class_name,
+
+            "total_images": total,
+
+            "updated_at":
+                firestore.SERVER_TIMESTAMP
+
+        },
+
+        merge=True
+
+    )
+
+    return total         
+          #===================================================  
+def upload_image(
+
+    image,
+
+    email,
+
+    project,
+
+    class_name,
+
+    camera_source,
+
+    image_type="original"
+
+):
+
+    # ==========================
+    # Generate Filename
+    # ==========================
+
+    filename = f"{uuid.uuid4().hex}.jpg"
+
+    # ==========================
+    # Storage Path
+    # ==========================
+
+    storage_path = (
+
+        f"{email}/"
+
+        f"{project}/"
+
+        f"{class_name}/"
+
+        f"{filename}"
+
+    )
+
+    # ==========================
+    # Convert PIL -> JPEG Bytes
+    # ==========================
+
+    buffer = io.BytesIO()
+
+    image.save(
+
+        buffer,
+
+        format="JPEG",
+
+        quality=95
+
+    )
+
+    buffer.seek(0)
+
+    # ==========================
+    # Upload Firebase Storage
+    # ==========================
+
+   
+    blob = bucket.blob(
+
+        storage_path
+
+    )
+
+    blob.upload_from_file(
+
+        buffer,
+
+        content_type="image/jpeg"
+
+    )
+
+    # ==========================
+    # Make Public (Optional)
+    # ==========================
+
+    blob.make_public()
+
+    image_url = blob.public_url
+
+    # ==========================
+    # Return
+    # ==========================
+
+    return {
+
+        "filename": filename,
+
+        "storagePath": storage_path,
+
+        "imageUrl": image_url,
+
+        "cameraSource": camera_source,
+
+        "imageType": image_type
+
+    }          
+           #===================================================  
+
+def resize_image(image, width, height):
+
+    return image.resize(
+
+        (
+            int(width),
+
+            int(height)
+
+        ),
+
+        Image.Resampling.LANCZOS
+
+    )
+#=================================================
+def generate_images(image):
+
+    images = []
+
+    width, height = image.size
+
+    # =====================================
+    # Original
+    # =====================================
+
+    images.append(
+
+        ("original", image.copy())
+
+    )
+
+    # =====================================
+    # Rotation
+    # =====================================
+
+    images.append(
+
+        (
+            "rotation_-10",
+
+            image.rotate(
+                -10,
+                expand=False,
+                fillcolor=(0, 0, 0)
+            )
+
+        )
+
+    )
+
+    images.append(
+
+        (
+            "rotation_10",
+
+            image.rotate(
+                10,
+                expand=False,
+                fillcolor=(0, 0, 0)
+            )
+
+        )
+
+    )
+
+    # =====================================
+    # Zoom In
+    # =====================================
+
+    crop = image.crop(
+
+        (
+
+            width * 0.10,
+
+            height * 0.10,
+
+            width * 0.90,
+
+            height * 0.90
+
+        )
+
+    )
+
+    crop = crop.resize(
+
+        (width, height),
+
+        Image.Resampling.LANCZOS
+
+    )
+
+    images.append(
+
+        ("zoom_in", crop)
+
+    )
+
+    # =====================================
+    # Zoom Out
+    # =====================================
+
+    zoom = image.resize(
+
+        (
+
+            int(width * 0.80),
+
+            int(height * 0.80)
+
+        ),
+
+        Image.Resampling.LANCZOS
+
+    )
+
+    canvas = Image.new(
+
+        "RGB",
+
+        (width, height),
+
+        (0, 0, 0)
+
+    )
+
+    x = (width - zoom.width) // 2
+    y = (height - zoom.height) // 2
+
+    canvas.paste(
+
+        zoom,
+
+        (x, y)
+
+    )
+
+    images.append(
+
+        ("zoom_out", canvas)
+
+    )
+
+    # =====================================
+    # Brightness Dark
+    # =====================================
+
+    dark = ImageEnhance.Brightness(
+
+        image
+
+    ).enhance(0.7)
+
+    images.append(
+
+        ("brightness_dark", dark)
+
+    )
+
+    # =====================================
+    # Brightness Bright
+    # =====================================
+
+    bright = ImageEnhance.Brightness(
+
+        image
+
+    ).enhance(1.3)
+
+    images.append(
+
+        ("brightness_bright", bright)
+
+    )
+
+    # =====================================
+    # Translation Left
+    # =====================================
+
+    images.append(
+
+        (
+
+            "translate_left",
+
+            ImageChops.offset(
+
+                image,
+
+                -20,
+
+                0
+
+            )
+
+        )
+
+    )
+
+    # =====================================
+    # Translation Right
+    # =====================================
+
+    images.append(
+
+        (
+
+            "translate_right",
+
+            ImageChops.offset(
+
+                image,
+
+                20,
+
+                0
+
+            )
+
+        )
+
+    )
+
+    # =====================================
+    # Translation Up
+    # =====================================
+
+    images.append(
+
+        (
+
+            "translate_up",
+
+            ImageChops.offset(
+
+                image,
+
+                0,
+
+                -20
+
+            )
+
+        )
+
+    )
+
+    # =====================================
+    # Translation Down
+    # =====================================
+
+    images.append(
+
+        (
+
+            "translate_down",
+
+            ImageChops.offset(
+
+                image,
+
+                0,
+
+                20
+
+            )
+
+        )
+
+    )
+
+    return images
+ #===================================================  
+
+def decode_base64(image_base64):
+
+    # ==========================
+    # Remove Header
+    # ==========================
+
+    if "," in image_base64:
+
+        image_base64 = image_base64.split(",")[1]
+
+    # ==========================
+    # Decode Base64
+    # ==========================
+
+    image_bytes = base64.b64decode(
+        image_base64
+    )
+
+    # ==========================
+    # Convert to PIL
+    # ==========================
+
+    image = Image.open(
+
+        io.BytesIO(
+            image_bytes
+        )
+
+    ).convert("RGB")
+
+    return image  
+ #===================================================   
+ 
+def upload_generator(data):
+
+    # ==========================
+    # Read Request
+    # ==========================
+
+    email = data["email"]
+
+    project = data["project"]
+
+    class_name = data["className"]
+
+    resize_width = int(
+        data["resizeWidth"]
+    )
+
+    resize_height = int(
+        data["resizeHeight"]
+    )
+
+    camera_source = data.get(
+        "cameraSource",
+        "browser"
+    )
+
+    image_base64 = data["image"]
+
+
+    # ==========================
+    # Decode
+    # ==========================
+
+    image = decode_base64(
+        image_base64
+    )
+
+
+    # ==========================
+    # Resize
+    # ==========================
+
+    image = resize_image(
+
+        image,
+
+        resize_width,
+
+        resize_height
+
+    )
+
+
+    # ==========================
+    # Generate Images
+    # ==========================
+
+    generated_images = generate_images(
+        image
+    )
+
+
+    uploaded_files = []
+
+
+    # ==========================
+    # Upload All Images
+    # ==========================
+
+    for image_type, img in generated_images:
+
+        upload_result = upload_image(
+
+            image=img,
+
+            email=email,
+
+            project=project,
+
+            class_name=class_name,
+
+            camera_source=camera_source,
+
+            image_type=image_type
+
+        )
+
+        uploaded_files.append({
+
+            "type": image_type,
+
+            "filename":
+                upload_result["filename"],
+
+            "storagePath":
+                upload_result["storagePath"],
+
+            "imageUrl":
+                upload_result["imageUrl"]
+
+        })
+
+
+    # ==========================
+    # Update Firestore
+    # ==========================
+
+    total_images = update_firestore(
+
+        email=email,
+
+        project=project,
+
+        class_name=class_name,
+
+        increase=len(generated_images)
+
+    )
+
+
+    # ==========================
+    # Response
+    # ==========================
+
+    return {
+
+        "success": True,
+
+        "captureMode": "generator",
+
+        "generated": len(
+            generated_images
+        ),
+
+        "cameraSource":
+            camera_source,
+
+        "totalImages":
+            total_images,
+
+        "files":
+            uploaded_files
+
+    }
+ #===================================================  
+def upload_burst(data):
+
+    # ==========================
+    # Read Request
+    # ==========================
+
+    email = data["email"]
+
+    project = data["project"]
+
+    class_name = data["className"]
+
+    resize_width = int(
+        data["resizeWidth"]
+    )
+
+    resize_height = int(
+        data["resizeHeight"]
+    )
+
+    camera_source = data.get(
+        "cameraSource",
+        "browser"
+    )
+
+    images = data["images"]
+
+    uploaded_files = []
+
+    # ==========================
+    # Upload Images
+    # ==========================
+
+    for index, image_base64 in enumerate(images):
+
+        # Decode
+        image = decode_base64(
+            image_base64
+        )
+
+        # Resize
+        image = resize_image(
+
+            image,
+
+            resize_width,
+
+            resize_height
+
+        )
+
+        # Upload Firebase
+        upload_result = upload_image(
+
+            image=image,
+
+            email=email,
+
+            project=project,
+
+            class_name=class_name,
+
+            camera_source=camera_source,
+
+            image_type=f"burst_{index+1}"
+
+        )
+
+        uploaded_files.append({
+
+            "filename":
+                upload_result["filename"],
+
+            "storagePath":
+                upload_result["storagePath"],
+
+            "imageUrl":
+                upload_result["imageUrl"]
+
+        })
+
+    # ==========================
+    # Update Firestore
+    # ==========================
+
+    total_images = update_firestore(
+
+        email=email,
+
+        project=project,
+
+        class_name=class_name,
+
+        increase=len(images)
+
+    )
+
+    # ==========================
+    # Response
+    # ==========================
+
+    return {
+
+        "success": True,
+
+        "captureMode": "burst",
+
+        "uploaded": len(images),
+
+        "files": uploaded_files,
+
+        "cameraSource": camera_source,
+
+        "totalImages": total_images
+
+    }    
+ #====================================================
+def upload_single(data):
+
+    # ==========================
+    # Read Request
+    # ==========================
+
+    email = data["email"]
+
+    project = data["project"]
+
+    class_name = data["className"]
+
+    resize_width = int(
+        data["resizeWidth"]
+    )
+
+    resize_height = int(
+        data["resizeHeight"]
+    )
+
+    camera_source = data.get(
+        "cameraSource",
+        "browser"
+    )
+
+    image_base64 = data["image"]
+
+    # ==========================
+    # Decode Image
+    # ==========================
+
+    image = decode_base64(
+        image_base64
+    )
+
+    # ==========================
+    # Resize
+    # ==========================
+
+    image = resize_image(
+
+        image,
+
+        resize_width,
+
+        resize_height
+
+    )
+
+    # ==========================
+    # Upload
+    # ==========================
+
+    upload_result = upload_image(
+
+        image=image,
+
+        email=email,
+
+        project=project,
+
+        class_name=class_name,
+
+        camera_source=camera_source,
+
+        image_type="original"
+
+    )
+
+    # ==========================
+    # Update Firestore
+    # ==========================
+
+    total_images = update_firestore(
+
+        email=email,
+
+        project=project,
+
+        class_name=class_name
+
+    )
+
+    # ==========================
+    # Response
+    # ==========================
+
+    return {
+
+        "success": True,
+
+        "captureMode": "single",
+
+        "filename":
+            upload_result["filename"],
+
+        "storagePath":
+            upload_result["storagePath"],
+
+        "imageUrl":
+            upload_result["imageUrl"],
+
+        "cameraSource":
+            camera_source,
+
+        "totalImages":
+            total_images
+
+    }   
 #=====================================================
 @app.route(
     "/upload_dataset_image",
@@ -1173,285 +2032,85 @@ def upload_dataset_image():
 
     try:
 
-        # ==========================================
-        # Request
-        # ===================================== 
-
         data = request.get_json()
 
-        email = data["email"]
+        if not data:
 
-        project = data["project"]
+            return jsonify({
 
-        class_name = data["className"]
+                "success": False,
 
-        resize_width = int(
-            data["resizeWidth"]
-        )
+                "message": "No JSON data"
 
-        resize_height = int(
-            data["resizeHeight"]
-        )
-
-        camera_source = data.get(
-            "cameraSource",
-            "browser"
-        )
+            }), 400
 
         capture_mode = data.get(
+
             "captureMode",
+
             "single"
-        )
 
-        image_base64 = data["image"]
+        ).lower()
 
-        # ==========================================
-        # Decode Base64
-        # ==========================================
 
-        if "," in image_base64:
+        # ==========================
+        # Single Capture
+        # ==========================
 
-            image_base64 = image_base64.split(",")[1]
+        if capture_mode == "single":
 
-        image_bytes = base64.b64decode(
-            image_base64
-        )
+            result = upload_single(data)
 
-        image = Image.open(
-            BytesIO(image_bytes)
-        ).convert("RGB")
 
-        image = image.resize(
+        # ==========================
+        # Burst Capture
+        # ==========================
 
-            (
-                resize_width,
-                resize_height
-            )
+        elif capture_mode == "burst":
 
-        )
+            result = upload_burst(data)
 
-        # ==========================================
-        # Filename
-        # ==========================================
 
-        filename = (
-            f"{uuid.uuid4()}.jpg"
-        )
+        # ==========================
+        # AI Dataset Generator
+        # ==========================
 
-        storage_path = (
+        elif capture_mode == "generator":
 
-            f"{email}/"
+            result = upload_generator(data)
 
-            f"{project}/"
 
-            f"class/"
+        # ==========================
+        # Unknown Mode
+        # ==========================
 
-            f"{class_name}/"
+        else:
 
-            f"{filename}"
+            return jsonify({
 
-        )
+                "success": False,
 
-        # ==========================================
-        # Upload Storage
-        # ==========================================
+                "message":
 
-        output = BytesIO()
+                f"Unknown captureMode : {capture_mode}"
 
-        image.save(
+            }), 400
 
-            output,
 
-            format="JPEG",
+        return jsonify(result)
 
-            quality=95
-
-        )
-
-        output.seek(0)
-
-        blob = bucket.blob(
-            storage_path
-        )
-
-        blob.upload_from_file(
-
-            output,
-
-            content_type="image/jpeg"
-
-        )
-
-        blob.make_public()
-
-        image_url = blob.public_url
-
-        # ==========================================
-        # Firestore Class Document
-        # ==========================================
-
-        doc = (
-
-            worker_db
-
-            .collection("user")
-
-            .document(email)
-
-            .collection("dataset_session")
-
-            .document(project)
-
-            .collection("class")
-
-            .document(class_name)
-
-        )
-
-        snapshot = doc.get()
-
-        total_images = 0
-
-        if snapshot.exists:
-
-            total_images = (
-
-                snapshot.to_dict()
-
-                .get(
-                    "total_images",
-                    0
-                )
-
-            )
-
-        total_images += 1
-
-        # ==========================================
-        # Update Class
-        # ==========================================
-
-        doc.set(
-
-            {
-
-                "project":
-                    project,
-
-                "label":
-                    class_name,
-
-                "resize_width":
-                    resize_width,
-
-                "resize_height":
-                    resize_height,
-
-                "camera_source":
-                    camera_source,
-
-                "capture_mode":
-                    capture_mode,
-
-                "total_images":
-                    total_images,
-
-                "updated_at":
-                    firestore.SERVER_TIMESTAMP
-
-            },
-
-            merge=True
-
-        )
-
-        # ==========================================
-        # Save Image Document
-        # ==========================================
-
-        doc.collection("images") \
-            .document(
-                filename.replace(".jpg","")
-            ) \
-            .set(
-
-                {
-
-                    "filename":
-                        filename,
-
-                    "imageUrl":
-                        image_url,
-
-                    "storagePath":
-                        storage_path,
-
-                    "width":
-                        resize_width,
-
-                    "height":
-                        resize_height,
-
-                    "camera_source":
-                        camera_source,
-
-                    "capture_mode":
-                        capture_mode,
-
-                    "file_size":
-                        len(image_bytes),
-
-                    "created_at":
-                        firestore.SERVER_TIMESTAMP
-
-                }
-
-            )
-
-        # ==========================================
-        # Response
-        # ==========================================
-
-        return jsonify(
-
-            {
-
-                "status":
-                    "ok",
-
-                "imageUrl":
-                    image_url,
-
-                "filename":
-                    filename,
-
-                "storagePath":
-                    storage_path,
-
-                "totalImages":
-                    total_images
-
-            }
-
-        )
 
     except Exception as ex:
 
-        traceback.print_exc()
+        print(ex)
 
-        return jsonify(
+        return jsonify({
 
-            {
+            "success": False,
 
-                "status":
-                    "error",
+            "message": str(ex)
 
-                "message":
-                    str(ex)
-
-            }
-
-        ), 500
+        }), 500
 # =========================================================
 # RUN
 # ======================================================
