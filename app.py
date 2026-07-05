@@ -1252,13 +1252,15 @@ def update_firestore(
 
     class_name,
 
-    increase=1
+    increase=1,
+
+    total_size=0
 
 ):
 
-    # =====================================
-    # Class Document
-    # =====================================
+    # ==========================
+    # Firestore Document
+    # ==========================
 
     doc_ref = (
 
@@ -1272,9 +1274,9 @@ def update_firestore(
 
     )
 
-    # =====================================
-    # Read Current Total
-    # =====================================
+    # ==========================
+    # Read Current Data
+    # ==========================
 
     doc = doc_ref.get()
 
@@ -1290,15 +1292,31 @@ def update_firestore(
 
         )
 
+        class_size = current.get(
+
+            "total_size",
+
+            0
+
+        )
+
     else:
 
         total_images = 0
 
+        class_size = 0
+
+    # ==========================
+    # Update Values
+    # ==========================
+
     total_images += increase
 
-    # =====================================
-    # Update Class
-    # =====================================
+    class_size += total_size
+
+    # ==========================
+    # Save Firestore
+    # ==========================
 
     doc_ref.set(
 
@@ -1310,6 +1328,8 @@ def update_firestore(
 
             "total_images": total_images,
 
+            "total_size": class_size,
+
             "updated_at":
                 firestore.SERVER_TIMESTAMP
 
@@ -1319,7 +1339,25 @@ def update_firestore(
 
     )
 
-    return total_images
+    # ==========================
+    # Return Summary
+    # ==========================
+
+    return {
+
+        "totalImages":
+            total_images,
+
+        "classSize":
+            class_size,
+
+        "classSizeKB":
+            round(class_size / 1024, 1),
+
+        "classSizeMB":
+            round(class_size / 1024 / 1024, 2)
+
+    }
         
           #===================================================  
 def upload_image(
@@ -1859,8 +1897,8 @@ def upload_single(data):
 
         class_name=class_name,
 
-        increase=1
-
+        increase=1,
+              total_size=file_size
     )
 
     # ==========================
@@ -2067,7 +2105,8 @@ def upload_burst(data):
 
         class_name=class_name,
 
-        increase=len(images)
+        increase=len(images),
+        total_size=total_size
 
     )
 
@@ -2295,7 +2334,8 @@ def upload_generator(data):
 
         class_name=class_name,
 
-        increase=len(generated_images)
+        increase=len(generated_images),
+        total_size=total_size
 
     )
 
