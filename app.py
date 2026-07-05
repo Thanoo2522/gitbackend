@@ -1,8 +1,8 @@
 #from click import command
 from flask import Flask, request, jsonify
 from flask import render_template
- 
- 
+
+
 from flask import send_file
 
 import os
@@ -31,7 +31,7 @@ import numpy as np
 from datetime import timedelta
 from flask_cors import CORS
 
-import tensorflow as tf 
+import tensorflow as tf
 
 import io
 
@@ -47,7 +47,7 @@ CORS(
         }
     }
 )
- # =========================================================
+# =========================================================
 # HEARTBEAT STATE
 # =========================================================
 heartbeat_started = False
@@ -83,8 +83,6 @@ WORKER_FIREBASE_KEY = os.environ.get(
     "WORKER_FIREBASE_KEY"
 )
 
- 
-
 SERVER_ID = os.environ.get(
     "SERVER_ID"
 )
@@ -92,8 +90,6 @@ SERVER_ID = os.environ.get(
 WORKER_WEBHOOK_URL = os.environ.get(
     "WORKER_WEBHOOK_URL"
 )
-
- 
 
 # =========================================================
 # VALIDATION
@@ -105,14 +101,13 @@ required_env = {
 
     "WORKER_FIREBASE_KEY":
         WORKER_FIREBASE_KEY,
- 
 
     "SERVER_ID":
         SERVER_ID,
 
     "WORKER_WEBHOOK_URL":
         WORKER_WEBHOOK_URL
-     
+
 }
 
 for k, v in required_env.items():
@@ -120,13 +115,19 @@ for k, v in required_env.items():
     if not v:
         raise RuntimeError(f"Missing {k}")
 
-# ================================================== 
+# หลังจากผ่าน loop ข้างบนแล้ว ตัวแปรเหล่านี้ไม่มีทาง None
+# แต่ Pylance มองไม่เห็นความสัมพันธ์นั้น เลย assert ให้ชัดเจน
+assert HUB_FIREBASE_KEY is not None
+assert WORKER_FIREBASE_KEY is not None
+assert SERVER_ID is not None
+assert WORKER_WEBHOOK_URL is not None
+
+# ==================================================
 # FIREBASE
- 
 
 # ---------------------------------------------------------
 # HUB DB
-# ------------------------------------------- 
+# -------------------------------------------
 hub_cred = credentials.Certificate(
     json.loads(HUB_FIREBASE_KEY)
 )
@@ -169,15 +170,21 @@ worker_db = firestore.client(
 bucket = storage.bucket(
     app=worker_app
 )
-# ============================================ 
+# ============================================
 @app.route("/predict", methods=["POST"])
 def predict():
 
     try:
 
-        data = request.get_json()
+        data = request.get_json(silent=True) or {}
 
-        image_b64 = data["image"]
+        image_b64 = data.get("image")
+
+        if not image_b64:
+            return jsonify({
+                "success": False,
+                "error": "missing image"
+            }), 400
 
         image_bytes = base64.b64decode(
             image_b64
@@ -298,7 +305,7 @@ def predict():
         }), 500
 # =========================================================
 # HEARTBEAT LOOP กระตุ้กไปที่ HUB  ให้รู้ว่ายังonline อยู่
-# ==================================================== 
+# ====================================================
 def heartbeat_loop():
 
     print("🔥 HEARTBEAT LOOP STARTED")
@@ -443,7 +450,7 @@ def check_register():
                 "registered": False
             })
 
-        data = doc.to_dict()
+        data = doc.to_dict() or {}
 
         return jsonify({
             "registered":
@@ -452,9 +459,6 @@ def check_register():
                     False
                 )
         })
-
- 
-        
 
     except Exception:
 
@@ -558,7 +562,7 @@ def login_user():
 
     try:
 
-        body = request.get_json() or {}
+        body = request.get_json(silent=True) or {}
 
         email = (
             body.get("email", "")
@@ -569,6 +573,12 @@ def login_user():
         password = body.get(
             "password", ""
         )
+
+        if not email:
+            return jsonify({
+                "status": "error",
+                "message": "no email"
+            }), 400
 
         doc = (
             worker_db
@@ -584,10 +594,10 @@ def login_user():
                 "message": "user not found"
             }), 404
 
-        user = doc.to_dict()
+        user = doc.to_dict() or {}
 
         if (
-            user["password"]
+            user.get("password")
             != password
         ):
 
@@ -601,17 +611,19 @@ def login_user():
             "status": "success",
 
             "email":
-                user["email"],
+                user.get("email"),
 
             "fullname":
-                user["fullname"],
+                user.get("fullname"),
 
             "worker_id":
-                user["worker_id"]
+                user.get("worker_id")
 
         })
 
     except Exception as e:
+
+        traceback.print_exc()
 
         return jsonify({
 
@@ -621,16 +633,16 @@ def login_user():
 
         }), 500
  # =========================================================
-# CREATE PROJECT  
+# CREATE PROJECT
 # =========================================================
 @app.route("/create_project", methods=["POST"])
 def create_project():
 
     try:
 
-        data = request.get_json()
+        data = request.get_json(silent=True) or {}
 
-        email = (   data.get("email", "")  .lower()   .strip())
+        email = (data.get("email", "").lower().strip())
         project_name = data.get("project", "").strip()
         class_name = data.get("className", "").strip()
 
@@ -647,10 +659,10 @@ def create_project():
         # -----------------------------
         if not email:
 
-                return jsonify({
-               "success": False,
-              "message": "email missing"
-               }), 400
+            return jsonify({
+                "success": False,
+                "message": "email missing"
+            }), 400
 
         if not project_name:
             return jsonify({
@@ -669,10 +681,10 @@ def create_project():
         # deviceId/project/class
         # -----------------------------
         folder_path = (
-              f"{email}/"
-                 f"{project_name}/"
-                 f"{class_name}"
-                    )
+            f"{email}/"
+            f"{project_name}/"
+            f"{class_name}"
+        )
 
         # -----------------------------
         # Count Images
@@ -714,7 +726,7 @@ def create_project():
                 project_name,
 
             "created_at":
-                firestore.SERVER_TIMESTAMP
+                firestore.SERVER_TIMESTAMP  # type: ignore
 
         }, merge=True)
 
@@ -750,7 +762,7 @@ def create_project():
                 total_images,
 
             "updated_at":
-                firestore.SERVER_TIMESTAMP
+                firestore.SERVER_TIMESTAMP  # type: ignore
 
         })
 
@@ -761,7 +773,7 @@ def create_project():
             "message":
                 "Project created",
             "email":
-                     email,
+                email,
 
             "project":
                 project_name,
@@ -790,11 +802,17 @@ def create_project():
 @app.route("/delete_class", methods=["POST"])
 def delete_class():
     try:
-        data = request.json
+        data = request.get_json(silent=True) or {}
 
-        email = data["email"]
-        project = data["project"]
-        className = data["className"]
+        email = data.get("email")
+        project = data.get("project")
+        className = data.get("className")
+
+        if not email or not project or not className:
+            return jsonify({
+                "status": "error",
+                "message": "email, project, className required"
+            }), 400
 
         doc_ref = worker_db.collection("user") \
             .document(email) \
@@ -810,17 +828,18 @@ def delete_class():
         })
 
     except Exception as e:
+        traceback.print_exc()
         return jsonify({
             "status": "error",
             "message": str(e)
-        })        
+        })
 #===============================================
 @app.route("/get_projects", methods=["POST"])
 def get_projects():
 
     try:
 
-        data = request.get_json() or {}
+        data = request.get_json(silent=True) or {}
 
         email = (
             data.get("email", "")
@@ -986,19 +1005,25 @@ def get_projects():
             "message": str(ex)
 
         }), 500
- 
+
 #======================================================
-    
+
 #======================================================
 @app.route("/train_dataset", methods=["POST"])
 def train_dataset():
 
     try:
 
-        data = request.get_json()
+        data = request.get_json(silent=True) or {}
 
-        device_id = data["deviceId"]
-        project = data["project"]
+        device_id = data.get("deviceId")
+        project = data.get("project")
+
+        if not device_id or not project:
+            return jsonify({
+                "status": "error",
+                "message": "deviceId and project required"
+            }), 400
 
         # ----------------------------------
         # create training job
@@ -1015,7 +1040,7 @@ def train_dataset():
             "project": project,
             "status": "generating_csv",
             "progress": 0,
-            "created_at": firestore.SERVER_TIMESTAMP
+            "created_at": firestore.SERVER_TIMESTAMP  # type: ignore
         })
 
         job_id = job_ref.id
@@ -1060,12 +1085,15 @@ def train_dataset():
 
             for image_doc in image_docs:
 
-                image_data = image_doc.to_dict()
+                image_data = image_doc.to_dict() or {}
 
-                storage_path = image_data["storage_path"]
+                storage_path = image_data.get("storage_path")
+
+                if not storage_path:
+                    continue
 
                 csv_lines.append(
-                     f"gs://basework-51f3b.firebasestorage.app/{storage_path},{class_name}"
+                    f"gs://basework-51f3b.firebasestorage.app/{storage_path},{class_name}"
                 )
 
                 total_images += 1
@@ -1103,7 +1131,7 @@ def train_dataset():
             "csv_path": csv_path,
 
             "updated_at":
-                firestore.SERVER_TIMESTAMP
+                firestore.SERVER_TIMESTAMP  # type: ignore
         })
 
         return jsonify({
@@ -1124,7 +1152,7 @@ def train_dataset():
         return jsonify({
             "status": "error",
             "message": str(e)
-        }), 500   
+        }), 500
 
 #======================================================
 @app.route("/download_csv", methods=["POST"])
@@ -1132,10 +1160,16 @@ def download_csv():
 
     try:
 
-        data = request.get_json()
+        data = request.get_json(silent=True) or {}
 
-        device_id = data["deviceId"]
-        job_id = data["jobId"]
+        device_id = data.get("deviceId")
+        job_id = data.get("jobId")
+
+        if not device_id or not job_id:
+            return jsonify({
+                "status": "error",
+                "message": "deviceId and jobId required"
+            }), 400
 
         csv_path = (
             f"training_jobs/"
@@ -1171,7 +1205,7 @@ def download_csv():
         return jsonify({
             "status": "error",
             "message": str(e)
-        }), 500       
+        }), 500
         #===============================
 def save_image_document(
 
@@ -1241,10 +1275,10 @@ def save_image_document(
             augmentation,
 
         "created_at":
-            firestore.SERVER_TIMESTAMP
+            firestore.SERVER_TIMESTAMP  # type: ignore
 
-    })  
-         #===================================================  
+    })
+         #===================================================
 def update_firestore(
 
     email,
@@ -1283,7 +1317,7 @@ def update_firestore(
 
     if doc.exists:
 
-        current = doc.to_dict()
+        current = doc.to_dict() or {}
 
         total_images = current.get(
 
@@ -1332,7 +1366,7 @@ def update_firestore(
             "total_size": class_size,
 
             "updated_at":
-                firestore.SERVER_TIMESTAMP
+                firestore.SERVER_TIMESTAMP  # type: ignore
 
         },
 
@@ -1359,8 +1393,8 @@ def update_firestore(
             round(class_size / 1024 / 1024, 2)
 
     }
-        
-          #===================================================  
+
+          #===================================================
 def upload_image(
 
     image,
@@ -1385,20 +1419,20 @@ def upload_image(
 
     # ==========================
     # Storage Path
-    # ==========================   
+    # ==========================
     storage_path = (
 
-                 f"{email}/"
+        f"{email}/"
 
-                 f"{project}/"
+        f"{project}/"
 
-                f"class/"
+        f"class/"
 
-                 f"{class_name}/"
+        f"{class_name}/"
 
-                 f"{filename}"
+        f"{filename}"
 
-               )
+    )
 
     # ==========================
     # Convert PIL -> JPEG Bytes
@@ -1422,7 +1456,6 @@ def upload_image(
     # Upload Firebase Storage
     # ==========================
 
-   
     blob = bucket.blob(
 
         storage_path
@@ -1461,8 +1494,8 @@ def upload_image(
 
         "imageType": image_type
 
-    }          
-           #===================================================  
+    }
+           #===================================================
 
 def resize_image(image, width, height):
 
@@ -1737,7 +1770,7 @@ def generate_images(image):
     )
 
     return images
- #===================================================  
+ #===================================================
 
 def decode_base64(image_base64):
 
@@ -1769,8 +1802,8 @@ def decode_base64(image_base64):
 
     ).convert("RGB")
 
-    return image  
- #===================================================   
+    return image
+ #===================================================
 def upload_single(data):
 
     # ==========================
@@ -1892,17 +1925,17 @@ def upload_single(data):
 
     summary = update_firestore(
 
-    email=email,
+        email=email,
 
-    project=project,
+        project=project,
 
-    class_name=class_name,
+        class_name=class_name,
 
-    increase=1,
+        increase=1,
 
-    total_size=file_size
+        total_size=file_size
 
-      )
+    )
 
     # ==========================
     # Response
@@ -1910,48 +1943,48 @@ def upload_single(data):
 
     return {
 
-    "success": True,
+        "success": True,
 
-    "captureMode": "single",
+        "captureMode": "single",
 
-    "filename":
-        upload_result["filename"],
+        "filename":
+            upload_result["filename"],
 
-    "storagePath":
-        upload_result["storagePath"],
+        "storagePath":
+            upload_result["storagePath"],
 
-    "imageUrl":
-        upload_result["imageUrl"],
+        "imageUrl":
+            upload_result["imageUrl"],
 
-    "cameraSource":
-        camera_source,
+        "cameraSource":
+            camera_source,
 
-    "totalImages":
-        summary["totalImages"],
+        "totalImages":
+            summary["totalImages"],
 
-    "classSize":
-        summary["classSize"],
+        "classSize":
+            summary["classSize"],
 
-    "classSizeKB":
-        summary["classSizeKB"],
+        "classSizeKB":
+            summary["classSizeKB"],
 
-    "classSizeMB":
-        summary["classSizeMB"],
+        "classSizeMB":
+            summary["classSizeMB"],
 
-    "width":
-        resize_width,
+        "width":
+            resize_width,
 
-    "height":
-        resize_height,
+        "height":
+            resize_height,
 
-    "fileSize":
-        file_size,
+        "fileSize":
+            file_size,
 
-    "fileSizeKB":
-        round(file_size / 1024, 1)
+        "fileSizeKB":
+            round(file_size / 1024, 1)
 
-}
- #===================================================  
+    }
+ #===================================================
 def upload_burst(data):
 
     # ==========================
@@ -2157,18 +2190,18 @@ def upload_burst(data):
         "height":
             resize_height,
 
-        
+
         "totalImages":
-          summary["totalImages"],
+            summary["totalImages"],
 
-         "classSize":
-             summary["classSize"],
+        "classSize":
+            summary["classSize"],
 
-         "classSizeKB":
-             summary["classSizeKB"],
+        "classSizeKB":
+            summary["classSizeKB"],
 
-         "classSizeMB":
-          summary["classSizeMB"],
+        "classSizeMB":
+            summary["classSizeMB"],
 
 
         "totalSize":
@@ -2186,7 +2219,7 @@ def upload_burst(data):
         "files":
             uploaded_files
 
-    }  
+    }
  #====================================================
 def upload_generator(data):
 
@@ -2349,7 +2382,7 @@ def upload_generator(data):
     # Update Firestore Summary
     # ==========================
 
-    summary  = update_firestore(
+    summary = update_firestore(
 
         email=email,
 
@@ -2397,18 +2430,18 @@ def upload_generator(data):
         "height":
             resize_height,
 
-        
+
         "totalImages":
-         summary["totalImages"],
+            summary["totalImages"],
 
-       "classSize":
-         summary["classSize"],
+        "classSize":
+            summary["classSize"],
 
-       "classSizeKB":
-        summary["classSizeKB"],
+        "classSizeKB":
+            summary["classSizeKB"],
 
         "classSizeMB":
-          summary["classSizeMB"],
+            summary["classSizeMB"],
 
 
         "totalSize":
@@ -2436,7 +2469,7 @@ def upload_dataset_image():
 
     try:
 
-        data = request.get_json()
+        data = request.get_json(silent=True) or {}
 
         if not data:
 
@@ -2506,7 +2539,7 @@ def upload_dataset_image():
 
     except Exception as ex:
 
-        print(ex)
+        traceback.print_exc()
 
         return jsonify({
 
@@ -2519,7 +2552,7 @@ def upload_dataset_image():
 @app.route("/export_project", methods=["POST"])
 def export_project():
     try:
-        data = request.get_json()
+        data = request.get_json(silent=True) or {}
         email = data.get("email")
         project = data.get("project")
 
@@ -2569,6 +2602,190 @@ def export_project():
             "success": False,
             "message": str(e)
         }), 500
+
+#================= training job status ==========================
+# ================================================
+# TRAIN PROJECT
+# ================================================
+ 
+
+from tensorflow.keras.applications import MobileNetV2  # type: ignore
+from tensorflow.keras import layers, models  # type: ignore
+from tensorflow.keras.optimizers import Adam  # type: ignore
+
+training_status = {}   # เก็บสถานะ in-memory: key = f"{email}/{project}"
+
+@app.route("/train_project", methods=["POST"])
+def train_project():
+    data = request.get_json(silent=True) or {}
+    email = data.get("email")
+    project = data.get("project")
+
+    if not email or not project:
+        return jsonify({
+            "success": False,
+            "message": "Missing email or project"
+        }), 400
+
+    prefix = f"{email}/{project}/class/"
+    blobs = list(bucket.list_blobs(prefix=prefix))
+
+    if not blobs:
+        return jsonify({
+            "success": False,
+            "message": "No training data found"
+        }), 404
+
+    key = f"{email}/{project}"
+    training_status[key] = {"status": "running", "progress": 0}
+
+    thread = threading.Thread(
+        target=run_training,
+        args=(email, project, blobs)
+    )
+    thread.start()
+
+    return jsonify({
+        "success": True,
+        "message": "Training started"
+    })
+
+
+@app.route("/train_status", methods=["POST"])
+def train_status():
+    data = request.get_json(silent=True) or {}
+    key = f"{data.get('email')}/{data.get('project')}"
+    return jsonify(training_status.get(
+        key, {"status": "idle"}
+    ))
+
+
+def run_training(email, project, blobs):
+    key = f"{email}/{project}"
+    prefix = f"{email}/{project}/class/"
+
+    try:
+        # ---------- 1. โหลดรูปตาม class ----------
+        images = []
+        labels = []
+        class_names = []
+
+        for blob in blobs:
+            # path รูปแบบ: {email}/{project}/class/{label}/{filename}
+            relative = blob.name[len(prefix):]
+            parts = relative.split("/")
+
+            if len(parts) < 2:
+                continue  # ไม่ใช่ไฟล์รูปในโฟลเดอร์ class
+
+            label = parts[0]
+            filename = parts[1]
+
+            if not filename.lower().endswith(
+                (".jpg", ".jpeg", ".png")
+            ):
+                continue
+
+            if label not in class_names:
+                class_names.append(label)
+
+            img_bytes = blob.download_as_bytes()
+            img = Image.open(BytesIO(img_bytes)).convert("RGB")
+            img = img.resize((224, 224))
+
+            images.append(np.array(img) / 255.0)
+            labels.append(class_names.index(label))
+
+        if len(images) == 0:
+            training_status[key] = {
+                "status": "error",
+                "message": "No valid images found"
+            }
+            return
+
+        X = np.array(images, dtype=np.float32)
+        y = tf.keras.utils.to_categorical(
+            labels, num_classes=len(class_names)
+        )
+
+        training_status[key]["progress"] = 20
+
+        # ---------- 2. Build Model (Transfer Learning) ----------
+        base_model = MobileNetV2(
+            input_shape=(224, 224, 3),
+            include_top=False,
+            weights="imagenet"
+        )
+        base_model.trainable = False
+
+        model = models.Sequential([
+            base_model,
+            layers.GlobalAveragePooling2D(),
+            layers.Dense(128, activation="relu"),
+            layers.Dropout(0.3),
+            layers.Dense(len(class_names), activation="softmax")
+        ])
+
+        model.compile(
+            optimizer=Adam(learning_rate=1e-4),
+            loss="categorical_crossentropy",
+            metrics=["accuracy"]
+        )
+
+        # ---------- 3. Train ----------
+        class ProgressCallback(tf.keras.callbacks.Callback):
+            def on_epoch_end(self, epoch, logs=None):
+                logs = logs or {}
+                pct = 20 + int(((epoch + 1) / EPOCHS) * 60)
+                training_status[key]["progress"] = pct
+                training_status[key]["accuracy"] = float(
+                    logs.get("accuracy", 0)
+                )
+
+        EPOCHS = 10
+        model.fit(
+            X, y,
+            epochs=EPOCHS,
+            batch_size=16,
+            validation_split=0.2,
+            callbacks=[ProgressCallback()],
+            verbose=1
+        )
+
+        training_status[key]["progress"] = 85
+
+        # ---------- 4. Convert -> TFLite ----------
+        converter = tf.lite.TFLiteConverter.from_keras_model(model)
+        tflite_model = converter.convert()
+
+        # ---------- 5. Upload กลับ Storage ----------
+        model_path = f"{email}/{project}/model/model.tflite"
+        model_blob = bucket.blob(model_path)
+        model_blob.upload_from_string(
+            tflite_model,
+            content_type="application/octet-stream"
+        )
+
+        labels_path = f"{email}/{project}/model/labels.json"
+        labels_blob = bucket.blob(labels_path)
+        labels_blob.upload_from_string(
+            json.dumps(class_names),
+            content_type="application/json"
+        )
+
+        training_status[key] = {
+            "status": "done",
+            "progress": 100,
+            "classes": class_names,
+            "num_images": len(images)
+        }
+
+    except Exception as e:
+        traceback.print_exc()
+        training_status[key] = {
+            "status": "error",
+            "message": str(e)
+        }
 # =========================================================
 # RUN
 # ======================================================

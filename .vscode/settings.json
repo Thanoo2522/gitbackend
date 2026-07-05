@@ -1,3 +1,9 @@
-{
-    "python-envs.defaultEnvManager": "ms-python.python:system"
+ 
+
+ {
+  "python.analysis.typeCheckingMode": "basic",
+  "python.analysis.diagnosticSeverityOverrides": {
+    "reportMissingImports": "warning"
+  },
+  "python-envs.defaultEnvManager": "ms-python.python:system"
 }
