@@ -1732,379 +1732,6 @@ def decode_base64(image_base64):
 
     return image  
  #===================================================   
- 
-def upload_generator(data):
-
-    # ==========================
-    # Read Request
-    # ==========================
-
-    email = data["email"]
-
-    project = data["project"]
-
-    class_name = data["className"]
-
-    resize_width = int(
-        data["resizeWidth"]
-    )
-
-    resize_height = int(
-        data["resizeHeight"]
-    )
-
-    camera_source = data.get(
-        "cameraSource",
-        "browser"
-    )
-
-    image_base64 = data["image"]
-
-    # ==========================
-    # Decode
-    # ==========================
-
-    image = decode_base64(
-        image_base64
-    )
-
-    # ==========================
-    # Resize
-    # ==========================
-
-    image = resize_image(
-
-        image,
-
-        resize_width,
-
-        resize_height
-
-    )
-
-    # ==========================
-    # Generate Images
-    # ==========================
-
-    generated_images = generate_images(
-        image
-    )
-
-    uploaded_files = []
-
-    # ==========================
-    # Upload Images
-    # ==========================
-
-    for image_type, img in generated_images:
-
-        # ----------------------
-        # File Size
-        # ----------------------
-
-        buffer = io.BytesIO()
-
-        img.save(
-
-            buffer,
-
-            format="JPEG",
-
-            quality=95
-
-        )
-
-        file_size = buffer.tell()
-
-        # ----------------------
-        # Upload Firebase Storage
-        # ----------------------
-
-        upload_result = upload_image(
-
-            image=img,
-
-            email=email,
-
-            project=project,
-
-            class_name=class_name,
-
-            camera_source=camera_source,
-
-            image_type=image_type
-
-        )
-
-        # ----------------------
-        # Save Firestore
-        # ----------------------
-
-        save_image_document(
-
-            email=email,
-
-            project=project,
-
-            class_name=class_name,
-
-            upload_result=upload_result,
-
-            width=resize_width,
-
-            height=resize_height,
-
-            file_size=file_size,
-
-            camera_source=camera_source,
-
-            capture_mode="generator",
-
-            augmentation=image_type
-
-        )
-
-        uploaded_files.append({
-
-            "type":
-                image_type,
-
-            "filename":
-                upload_result["filename"],
-
-            "storagePath":
-                upload_result["storagePath"],
-
-            "imageUrl":
-                upload_result["imageUrl"]
-
-        })
-
-    # ==========================
-    # Update Firestore Summary
-    # ==========================
-
-    total_images = update_firestore(
-
-        email=email,
-
-        project=project,
-
-        class_name=class_name,
-
-        increase=len(generated_images)
-
-    )
-
-    # ==========================
-    # Response
-    # ==========================
-
-    return {
-
-        "success": True,
-
-        "captureMode":
-            "generator",
-
-        "generated":
-            len(generated_images),
-
-        "cameraSource":
-            camera_source,
-
-        "totalImages":
-            total_images,
-
-        "files":
-            uploaded_files
-
-    }
- #===================================================  
-def upload_burst(data):
-
-    # ==========================
-    # Read Request
-    # ==========================
-
-    email = data["email"]
-
-    project = data["project"]
-
-    class_name = data["className"]
-
-    resize_width = int(
-        data["resizeWidth"]
-    )
-
-    resize_height = int(
-        data["resizeHeight"]
-    )
-
-    camera_source = data.get(
-        "cameraSource",
-        "browser"
-    )
-
-    images = data["images"]
-
-    uploaded_files = []
-
-    # ==========================
-    # Upload Images
-    # ==========================
-
-    for index, image_base64 in enumerate(images):
-
-        # ----------------------
-        # Decode
-        # ----------------------
-
-        image = decode_base64(
-            image_base64
-        )
-
-        # ----------------------
-        # Resize
-        # ----------------------
-
-        image = resize_image(
-
-            image,
-
-            resize_width,
-
-            resize_height
-
-        )
-
-        # ----------------------
-        # Calculate File Size
-        # ----------------------
-
-        buffer = io.BytesIO()
-
-        image.save(
-
-            buffer,
-
-            format="JPEG",
-
-            quality=95
-
-        )
-
-        file_size = buffer.tell()
-
-        # ----------------------
-        # Upload Firebase Storage
-        # ----------------------
-
-        upload_result = upload_image(
-
-            image=image,
-
-            email=email,
-
-            project=project,
-
-            class_name=class_name,
-
-            camera_source=camera_source,
-
-            image_type=f"burst_{index+1}"
-
-        )
-
-        # ----------------------
-        # Save Firestore
-        # ----------------------
-
-        save_image_document(
-
-            email=email,
-
-            project=project,
-
-            class_name=class_name,
-
-            upload_result=upload_result,
-
-            width=resize_width,
-
-            height=resize_height,
-
-            file_size=file_size,
-
-            camera_source=camera_source,
-
-            capture_mode="burst",
-
-            augmentation=f"burst_{index+1}"
-
-        )
-
-        # ----------------------
-        # Response List
-        # ----------------------
-
-        uploaded_files.append({
-
-            "type":
-                f"burst_{index+1}",
-
-            "filename":
-                upload_result["filename"],
-
-            "storagePath":
-                upload_result["storagePath"],
-
-            "imageUrl":
-                upload_result["imageUrl"]
-
-        })
-
-    # ==========================
-    # Update Firestore Summary
-    # ==========================
-
-    total_images = update_firestore(
-
-        email=email,
-
-        project=project,
-
-        class_name=class_name,
-
-        increase=len(images)
-
-    )
-
-    # ==========================
-    # Response
-    # ==========================
-
-    return {
-
-        "success": True,
-
-        "captureMode":
-            "burst",
-
-        "uploaded":
-            len(images),
-
-        "cameraSource":
-            camera_source,
-
-        "totalImages":
-            total_images,
-
-        "files":
-            uploaded_files
-
-    }    
- #====================================================
 def upload_single(data):
 
     # ==========================
@@ -2221,7 +1848,7 @@ def upload_single(data):
     )
 
     # ==========================
-    # Update Class Summary
+    # Update Firestore Summary
     # ==========================
 
     total_images = update_firestore(
@@ -2259,9 +1886,473 @@ def upload_single(data):
             camera_source,
 
         "totalImages":
-            total_images
+            total_images,
+
+        "width":
+            resize_width,
+
+        "height":
+            resize_height,
+
+        "fileSize":
+            file_size,
+
+        "fileSizeKB":
+            round(file_size / 1024, 1)
+
+    }
+ #===================================================  
+def upload_burst(data):
+
+    # ==========================
+    # Read Request
+    # ==========================
+
+    email = data["email"]
+
+    project = data["project"]
+
+    class_name = data["className"]
+
+    resize_width = int(
+        data["resizeWidth"]
+    )
+
+    resize_height = int(
+        data["resizeHeight"]
+    )
+
+    camera_source = data.get(
+        "cameraSource",
+        "browser"
+    )
+
+    images = data["images"]
+
+    uploaded_files = []
+
+    total_size = 0
+
+    # ==========================
+    # Upload Images
+    # ==========================
+
+    for index, image_base64 in enumerate(images):
+
+        # ----------------------
+        # Decode
+        # ----------------------
+
+        image = decode_base64(
+            image_base64
+        )
+
+        # ----------------------
+        # Resize
+        # ----------------------
+
+        image = resize_image(
+
+            image,
+
+            resize_width,
+
+            resize_height
+
+        )
+
+        # ----------------------
+        # Calculate File Size
+        # ----------------------
+
+        buffer = io.BytesIO()
+
+        image.save(
+
+            buffer,
+
+            format="JPEG",
+
+            quality=95
+
+        )
+
+        file_size = buffer.tell()
+
+        total_size += file_size
+
+        # ----------------------
+        # Upload Firebase Storage
+        # ----------------------
+
+        upload_result = upload_image(
+
+            image=image,
+
+            email=email,
+
+            project=project,
+
+            class_name=class_name,
+
+            camera_source=camera_source,
+
+            image_type=f"burst_{index+1}"
+
+        )
+
+        # ----------------------
+        # Save Firestore
+        # ----------------------
+
+        save_image_document(
+
+            email=email,
+
+            project=project,
+
+            class_name=class_name,
+
+            upload_result=upload_result,
+
+            width=resize_width,
+
+            height=resize_height,
+
+            file_size=file_size,
+
+            camera_source=camera_source,
+
+            capture_mode="burst",
+
+            augmentation=f"burst_{index+1}"
+
+        )
+
+        # ----------------------
+        # Response List
+        # ----------------------
+
+        uploaded_files.append({
+
+            "type":
+                f"burst_{index+1}",
+
+            "filename":
+                upload_result["filename"],
+
+            "storagePath":
+                upload_result["storagePath"],
+
+            "imageUrl":
+                upload_result["imageUrl"],
+
+            "fileSize":
+                file_size,
+
+            "fileSizeKB":
+                round(file_size / 1024, 1)
+
+        })
+
+    # ==========================
+    # Update Firestore Summary
+    # ==========================
+
+    total_images = update_firestore(
+
+        email=email,
+
+        project=project,
+
+        class_name=class_name,
+
+        increase=len(images)
+
+    )
+
+    # ==========================
+    # Calculate Average Size
+    # ==========================
+
+    average_size = (
+
+        round(total_size / len(images))
+
+        if images else 0
+
+    )
+
+    # ==========================
+    # Response
+    # ==========================
+
+    return {
+
+        "success": True,
+
+        "captureMode":
+            "burst",
+
+        "uploaded":
+            len(images),
+
+        "cameraSource":
+            camera_source,
+
+        "width":
+            resize_width,
+
+        "height":
+            resize_height,
+
+        "totalImages":
+            total_images,
+
+        "totalSize":
+            total_size,
+
+        "totalSizeKB":
+            round(total_size / 1024, 1),
+
+        "averageSize":
+            average_size,
+
+        "averageSizeKB":
+            round(average_size / 1024, 1),
+
+        "files":
+            uploaded_files
 
     }  
+ #====================================================
+def upload_generator(data):
+
+    # ==========================
+    # Read Request
+    # ==========================
+
+    email = data["email"]
+
+    project = data["project"]
+
+    class_name = data["className"]
+
+    resize_width = int(
+        data["resizeWidth"]
+    )
+
+    resize_height = int(
+        data["resizeHeight"]
+    )
+
+    camera_source = data.get(
+        "cameraSource",
+        "browser"
+    )
+
+    image_base64 = data["image"]
+
+    # ==========================
+    # Decode
+    # ==========================
+
+    image = decode_base64(
+        image_base64
+    )
+
+    # ==========================
+    # Resize
+    # ==========================
+
+    image = resize_image(
+
+        image,
+
+        resize_width,
+
+        resize_height
+
+    )
+
+    # ==========================
+    # Generate Images
+    # ==========================
+
+    generated_images = generate_images(
+        image
+    )
+
+    uploaded_files = []
+
+    total_size = 0
+
+    # ==========================
+    # Upload Images
+    # ==========================
+
+    for image_type, img in generated_images:
+
+        # ----------------------
+        # Calculate File Size
+        # ----------------------
+
+        buffer = io.BytesIO()
+
+        img.save(
+
+            buffer,
+
+            format="JPEG",
+
+            quality=95
+
+        )
+
+        file_size = buffer.tell()
+
+        total_size += file_size
+
+        # ----------------------
+        # Upload Firebase Storage
+        # ----------------------
+
+        upload_result = upload_image(
+
+            image=img,
+
+            email=email,
+
+            project=project,
+
+            class_name=class_name,
+
+            camera_source=camera_source,
+
+            image_type=image_type
+
+        )
+
+        # ----------------------
+        # Save Firestore
+        # ----------------------
+
+        save_image_document(
+
+            email=email,
+
+            project=project,
+
+            class_name=class_name,
+
+            upload_result=upload_result,
+
+            width=resize_width,
+
+            height=resize_height,
+
+            file_size=file_size,
+
+            camera_source=camera_source,
+
+            capture_mode="generator",
+
+            augmentation=image_type
+
+        )
+
+        uploaded_files.append({
+
+            "type":
+                image_type,
+
+            "filename":
+                upload_result["filename"],
+
+            "storagePath":
+                upload_result["storagePath"],
+
+            "imageUrl":
+                upload_result["imageUrl"],
+
+            "fileSize":
+                file_size,
+
+            "fileSizeKB":
+                round(file_size / 1024, 1)
+
+        })
+
+    # ==========================
+    # Update Firestore Summary
+    # ==========================
+
+    total_images = update_firestore(
+
+        email=email,
+
+        project=project,
+
+        class_name=class_name,
+
+        increase=len(generated_images)
+
+    )
+
+    # ==========================
+    # Calculate Average Size
+    # ==========================
+
+    average_size = (
+
+        round(total_size / len(generated_images))
+
+        if generated_images else 0
+
+    )
+
+    # ==========================
+    # Response
+    # ==========================
+
+    return {
+
+        "success": True,
+
+        "captureMode":
+            "generator",
+
+        "generated":
+            len(generated_images),
+
+        "cameraSource":
+            camera_source,
+
+        "width":
+            resize_width,
+
+        "height":
+            resize_height,
+
+        "totalImages":
+            total_images,
+
+        "totalSize":
+            total_size,
+
+        "totalSizeKB":
+            round(total_size / 1024, 1),
+
+        "averageSize":
+            average_size,
+
+        "averageSizeKB":
+            round(average_size / 1024, 1),
+
+        "files":
+            uploaded_files
+
+    }
 #=====================================================
 @app.route(
     "/upload_dataset_image",
