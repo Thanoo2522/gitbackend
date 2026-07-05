@@ -1889,17 +1889,19 @@ def upload_single(data):
     # Update Firestore Summary
     # ==========================
 
-    total_images = update_firestore(
+    summary = update_firestore(
 
-        email=email,
+    email=email,
 
-        project=project,
+    project=project,
 
-        class_name=class_name,
+    class_name=class_name,
 
-        increase=1,
-              total_size=file_size
-    )
+    increase=1,
+
+    total_size=file_size
+
+      )
 
     # ==========================
     # Response
@@ -1907,38 +1909,47 @@ def upload_single(data):
 
     return {
 
-        "success": True,
+    "success": True,
 
-        "captureMode": "single",
+    "captureMode": "single",
 
-        "filename":
-            upload_result["filename"],
+    "filename":
+        upload_result["filename"],
 
-        "storagePath":
-            upload_result["storagePath"],
+    "storagePath":
+        upload_result["storagePath"],
 
-        "imageUrl":
-            upload_result["imageUrl"],
+    "imageUrl":
+        upload_result["imageUrl"],
 
-        "cameraSource":
-            camera_source,
+    "cameraSource":
+        camera_source,
 
-        "totalImages":
-            total_images,
+    "totalImages":
+        summary["totalImages"],
 
-        "width":
-            resize_width,
+    "classSize":
+        summary["classSize"],
 
-        "height":
-            resize_height,
+    "classSizeKB":
+        summary["classSizeKB"],
 
-        "fileSize":
-            file_size,
+    "classSizeMB":
+        summary["classSizeMB"],
 
-        "fileSizeKB":
-            round(file_size / 1024, 1)
+    "width":
+        resize_width,
 
-    }
+    "height":
+        resize_height,
+
+    "fileSize":
+        file_size,
+
+    "fileSizeKB":
+        round(file_size / 1024, 1)
+
+}
  #===================================================  
 def upload_burst(data):
 
@@ -2097,7 +2108,7 @@ def upload_burst(data):
     # Update Firestore Summary
     # ==========================
 
-    total_images = update_firestore(
+    summary = update_firestore(
 
         email=email,
 
@@ -2145,8 +2156,19 @@ def upload_burst(data):
         "height":
             resize_height,
 
+        
         "totalImages":
-            total_images,
+          summary["totalImages"],
+
+         "classSize":
+             summary["classSize"],
+
+         "classSizeKB":
+             summary["classSizeKB"],
+
+         "classSizeMB":
+          summary["classSizeMB"],
+
 
         "totalSize":
             total_size,
@@ -2326,7 +2348,7 @@ def upload_generator(data):
     # Update Firestore Summary
     # ==========================
 
-    total_images = update_firestore(
+    summary  = update_firestore(
 
         email=email,
 
@@ -2374,8 +2396,19 @@ def upload_generator(data):
         "height":
             resize_height,
 
+        
         "totalImages":
-            total_images,
+         summary["totalImages"],
+
+       "classSize":
+         summary["classSize"],
+
+       "classSizeKB":
+        summary["classSizeKB"],
+
+        "classSizeMB":
+          summary["classSizeMB"],
+
 
         "totalSize":
             total_size,
