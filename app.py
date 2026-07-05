@@ -1986,7 +1986,7 @@ def upload_burst(data):
             camera_source=camera_source,
 
             image_type=f"burst_{index+1}",
-             increase=len(images)
+          
         )
 
         uploaded_files.append({
