@@ -3,6 +3,7 @@ from flask import Flask, request, jsonify
 from flask import render_template
  
  
+from flask import send_file
 
 import os
 import json
@@ -2513,6 +2514,60 @@ def upload_dataset_image():
 
             "message": str(ex)
 
+        }), 500
+#===========================================
+@app.route("/export_project", methods=["POST"])
+def export_project():
+    try:
+        data = request.get_json()
+        email = data.get("email")
+        project = data.get("project")
+
+        if not email or not project:
+            return jsonify({
+                "success": False,
+                "message": "Missing email or project"
+            }), 400
+
+        # เพิ่ม "class" เข้าไปใน prefix ให้ตรงกับ storage จริง
+        prefix = f"{email}/{project}/class/"
+
+        blobs = list(bucket.list_blobs(prefix=prefix))
+
+        if not blobs:
+            return jsonify({
+                "success": False,
+                "message": "No files found"
+            }), 404
+
+        zip_buffer = BytesIO()
+
+        with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
+            for blob in blobs:
+                if blob.name.endswith("/"):
+                    continue
+
+                relative_path = blob.name[len(prefix):]
+                if not relative_path:
+                    continue
+
+                file_bytes = blob.download_as_bytes()
+                zip_file.writestr(relative_path, file_bytes)
+
+        zip_buffer.seek(0)
+
+        return send_file(
+            zip_buffer,
+            mimetype="application/zip",
+            as_attachment=True,
+            download_name=f"{project}.zip"
+        )
+
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({
+            "success": False,
+            "message": str(e)
         }), 500
 # =========================================================
 # RUN
