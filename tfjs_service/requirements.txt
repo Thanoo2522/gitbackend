@@ -1,0 +1,5 @@
+Flask
+gunicorn
+firebase-admin
+tensorflow==2.15.0
+tensorflowjs==4.19.0
