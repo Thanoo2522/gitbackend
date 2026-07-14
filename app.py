@@ -1016,7 +1016,7 @@ def get_detection_projects():
         
         # เจาะจงพาธตรงตัวตามโครงสร้าง Firebase คอลัมน์ "detection"
         detection_folder_ref = worker_db.collection("user").document(email).collection("dataset_session").document("detection")
-        detection_projects = detection_folder_ref.list_collections()
+        detection_projects = detection_folder_ref.collections() # ดึงเอกสารย่อยทั้งหมดใน collection ของ detection
         
         for p_coll in detection_projects:
             project_name = p_coll.id
@@ -1072,7 +1072,7 @@ def get_segmentation_projects():
         
         # เจาะจงพาธตรงตัวตามโครงสร้าง Firebase คอลัมน์ "segmentation"
         segmentation_folder_ref = worker_db.collection("user").document(email).collection("dataset_session").document("segmentation")
-        segmentation_projects = segmentation_folder_ref.list_collections()
+        segmentation_projects = segmentation_folder_ref.collections()
         
         for p_coll in segmentation_projects:
             project_name = p_coll.id
