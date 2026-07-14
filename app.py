@@ -1,8 +1,9 @@
 #from click import command
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify , send_file
 from flask import render_template
 
 
+ 
 from flask import send_file
 
 import os
@@ -13,6 +14,7 @@ import time
 import threading
 
 from datetime import datetime
+from functools import wraps
 
 import firebase_admin
 from firebase_admin import credentials, firestore, storage
@@ -32,8 +34,17 @@ from datetime import timedelta
 from flask_cors import CORS
 
 import tensorflow as tf
-
 import io
+
+ 
+ 
+import tempfile
+import threading
+import traceback
+
+ 
+
+ 
 
 # =========================================================
 # FLASK
@@ -91,6 +102,14 @@ WORKER_WEBHOOK_URL = os.environ.get(
     "WORKER_WEBHOOK_URL"
 )
 
+# ---------------------------------------------------------
+# ADMIN SECRET KEY
+# ใช้เช็ค header "X-Admin-Key" สำหรับ endpoint จัดการแผน/โควต้า
+# ---------------------------------------------------------
+ADMIN_SECRET_KEY = os.environ.get(
+    "ADMIN_SECRET_KEY"
+)
+
 # =========================================================
 # VALIDATION
 # =========================================================
@@ -106,7 +125,10 @@ required_env = {
         SERVER_ID,
 
     "WORKER_WEBHOOK_URL":
-        WORKER_WEBHOOK_URL
+        WORKER_WEBHOOK_URL,
+
+    "ADMIN_SECRET_KEY":
+        ADMIN_SECRET_KEY
 
 }
 
@@ -121,6 +143,7 @@ assert HUB_FIREBASE_KEY is not None
 assert WORKER_FIREBASE_KEY is not None
 assert SERVER_ID is not None
 assert WORKER_WEBHOOK_URL is not None
+assert ADMIN_SECRET_KEY is not None
 
 # ==================================================
 # FIREBASE
@@ -170,6 +193,30 @@ worker_db = firestore.client(
 bucket = storage.bucket(
     app=worker_app
 )
+
+# =========================================================
+# ADMIN AUTH DECORATOR
+# ตรวจ header "X-Admin-Key" ให้ตรงกับ ADMIN_SECRET_KEY
+# ใช้กับ endpoint ที่เกี่ยวกับการจัดการแผน/โควต้า (admin only)
+# =========================================================
+def require_admin_key(f):
+
+    @wraps(f)
+    def wrapper(*args, **kwargs):
+
+        client_key = request.headers.get("X-Admin-Key", "")
+
+        if not client_key or client_key != ADMIN_SECRET_KEY:
+
+            return jsonify({
+                "status": "error",
+                "message": "unauthorized"
+            }), 401
+
+        return f(*args, **kwargs)
+
+    return wrapper
+
 # ============================================
 @app.route("/predict", methods=["POST"])
 def predict():
@@ -339,7 +386,7 @@ def heartbeat_loop():
 
             # -------------------------
             # SAVE HEARTBEAT
-            # -------------------------
+            # -------------------- 
             save_data = {
 
                 "server_id":
@@ -421,55 +468,118 @@ start_heartbeat_once()
 def home():
 
     return f"{SERVER_ID} RUNNING"
-
 # =========================================================
-# CHECK REGISTER
+# GET USER PLAN
+# อ่านข้อมูลแผนปัจจุบันของ user จาก Firestore
+# path: user/{email}/plan/select
 # =========================================================
-@app.route("/check-register", methods=["POST"])
-def check_register():
+@app.route("/get_user_plan", methods=["POST"])
+def get_user_plan():
 
     try:
 
-        body = request.get_json(
-            silent=True
-        ) or {}
+        data = request.get_json(silent=True) or {}
 
-        email = body.get("email")
+        email = (
+            data.get("email", "")
+            .lower()
+            .strip()
+        )
 
         if not email:
             return jsonify({
-                "registered": False
-            })
+                "success": False,
+                "message": "no email"
+            }), 400
 
-        doc = worker_db.collection("user") \
-            .document(email) \
+        plan_doc = (
+            worker_db
+            .collection("user")
+            .document(email)
+            .collection("plan")
+            .document("select")
             .get()
+        )
 
-        if not doc.exists:
+        if not plan_doc.exists:
             return jsonify({
-                "registered": False
+                "success": True,
+                "plan": "Free",
+                "usage": {},
+                "limits": {}
             })
 
-        data = doc.to_dict() or {}
+        plan_data = plan_doc.to_dict() or {}
 
         return jsonify({
-            "registered":
-                data.get(
-                    "register",
-                    False
-                )
+            "success": True,
+            "plan": plan_data.get("plan", "Free"),
+            "status": plan_data.get("status", ""),
+            "expireAt": str(plan_data.get("expireAt", "")),
+            "usage": plan_data.get("usage", {}),
+            "limits": plan_data.get("limits", {})
         })
 
-    except Exception:
+    except Exception as e:
 
         traceback.print_exc()
 
         return jsonify({
-            "registered": False
+            "success": False,
+            "message": str(e)
+        }), 500    
+
+# =========================================================
+# CHECK REGISTER
+# =========================================================
+@app.route("/check-register", methods=["POST", "OPTIONS"]) # 👈 1. เพิ่ม OPTIONS ตรงนี้
+def check_register():
+    # 🌟 2. ดักจับ Preflight Request ของเบราว์เซอร์
+    if request.method == "OPTIONS":
+        response = jsonify({"success": True})
+        response.headers.add("Access-Control-Allow-Origin", "*")
+        response.headers.add("Access-Control-Allow-Headers", "Content-Type,Authorization")
+        response.headers.add("Access-Control-Allow-Methods", "POST,OPTIONS")
+        return response, 200
+
+    try:
+        body = request.get_json(silent=True) or {}
+        email = body.get("email")
+
+        if not email:
+            resp = jsonify({"registered": False})
+            resp.headers.add("Access-Control-Allow-Origin", "*") # 👈 แนบ CORS Header
+            return resp, 200
+
+        doc = worker_db.collection("user").document(email).get()
+
+        if not doc.exists:
+            resp = jsonify({"registered": False})
+            resp.headers.add("Access-Control-Allow-Origin", "*") # 👈 แนบ CORS Header
+            return resp, 200
+
+        data = doc.to_dict() or {}
+
+        resp = jsonify({
+            "registered": data.get("register", False)
         })
-# =========================================================
+        resp.headers.add("Access-Control-Allow-Origin", "*") # 👈 แนบ CORS Header
+        return resp, 200
+
+    except Exception:
+        traceback.print_exc()
+        resp = jsonify({"registered": False})
+        resp.headers.add("Access-Control-Allow-Origin", "*") # 👈 แนบ CORS Header
+        return resp, 200  # หรือส่ง 500 ตามโครงสร้างเดิม
+# ================================================= 
 # REGISTER USER
-# =========================================================
+# =============================================== 
+from google.cloud import firestore  # ใช้ firestore.SERVER_TIMESTAMP
+
+from datetime import datetime, timedelta
+
+# ตัวอย่าง Starter อายุ 30 วัน
+expire_at = datetime.utcnow() + timedelta(days=30)
 @app.route("/register-user", methods=["POST"])
 def register_user():
 
@@ -516,6 +626,9 @@ def register_user():
                 "message": "email already exists"
             }), 400
 
+        # ------------------------------------------------
+        # บันทึก user หลัก
+        # ------------------------------------------------
         user_ref.set({
 
             "fullname": name,
@@ -534,6 +647,58 @@ def register_user():
         })
 
         print("✅ USER SAVED")
+
+        # ------------------------------------------------
+        # บันทึก plan เริ่มต้น (Free) ที่ user/{email}/plan/select
+        # ------------------------------------------------
+        plan_ref = (
+            user_ref
+            .collection("plan")
+            .document("select")
+        )
+        plan_ref.set({
+
+    "email": email,
+
+    "plan": "Free",
+
+    "status": "active",
+
+    "paymentStatus": "paid",
+
+    "created_at":
+        firestore.SERVER_TIMESTAMP,
+
+    "paidAt":
+        firestore.SERVER_TIMESTAMP,
+
+    "expireAt":
+        expire_at,
+
+    "limits": {
+
+        "maxProjects":1,
+
+        "maxImages": 500,
+
+        "storageBytes": 524288000   # 500 MB
+
+    },
+
+    "usage": {
+
+        "totalImages": 0,
+
+        "totalStorageBytes": 0,
+
+        "lastUpdated":
+            firestore.SERVER_TIMESTAMP
+
+    }
+
+})
+
+        print("✅ PLAN SAVED (free)")
 
         return jsonify({
 
@@ -632,172 +797,103 @@ def login_user():
             "message": str(e)
 
         }), 500
+
+ #=====================
+@app.route("/admin/login", methods=["POST"])
+def admin_login():
+
+    body = request.get_json(silent=True) or {}
+
+    admin_key = body.get("adminKey", "").strip()
+
+    if admin_key != ADMIN_SECRET_KEY:
+        return jsonify({
+            "status": "error",
+            "message": "Invalid Admin Key"
+        }), 401
+
+    return jsonify({
+        "status": "success"
+    })  
  # =========================================================
 # CREATE PROJECT
 # =========================================================
-@app.route("/create_project", methods=["POST"])
+ 
+
+# สมมติการตั้งค่า Firestore ตัวแปรหลักของคุณ (ปรับชื่อตามจริงของคุณ)
+# db = firestore.client()
+
+@app.route("/create_project", methods=["POST", "OPTIONS"])
 def create_project():
+    # จัดการ Preflight Request สำหรับ CORS
+    if request.method == "OPTIONS":
+        response = jsonify({"success": True})
+        response.headers.add("Access-Control-Allow-Origin", "*")
+        response.headers.add("Access-Control-Allow-Headers", "Content-Type,Authorization")
+        response.headers.add("Access-Control-Allow-Methods", "POST,OPTIONS")
+        return response, 200
 
     try:
+        body = request.get_json(silent=True) or {}
+        email = body.get("email")
+        project_name = body.get("project")
+        project_type = body.get("projectType", "classification")
 
-        data = request.get_json(silent=True) or {}
+        if not email or not project_name:
+            resp = jsonify({"success": False, "message": "Missing email or project name"})
+            resp.headers.add("Access-Control-Allow-Origin", "*")
+            return resp, 400
 
-        email = (data.get("email", "").lower().strip())
-        project_name = data.get("project", "").strip()
-        class_name = data.get("className", "").strip()
+        # 🎯 แตกกิ่งตามสเปก Workflow ใหม่ที่คุณระบุมา
+        if project_type == "classification":
+            class_name = body.get("className")
+            width = body.get("resize_width", 224)
+            height = body.get("resize_height", 224)
 
-        resize_width = int(
-            data.get("resize_width", 224)
-        )
+            if not class_name:
+                resp = jsonify({"success": False, "message": "Missing class name for classification"})
+                resp.headers.add("Access-Control-Allow-Origin", "*")
+                return resp, 400
 
-        resize_height = int(
-            data.get("resize_height", 224)
-        )
+            # พาธดั้งเดิมของ Classification: /user/{email}/dataset_session/{Project}/class/{Class}
+            doc_ref = worker_db.collection("user").document(email)\
+                        .collection("dataset_session").document(project_name)\
+                        .collection("class").document(class_name)
+            
+            doc_ref.set({
+                "label": class_name,
+                "total_images": 0,
+                "project_type": project_type,
+                "projectType": project_type,
+                "resize_width": width,
+                "resize_height": height
+            }, merge=True)
 
-        # -----------------------------
-        # Validation
-        # -----------------------------
-        if not email:
+        else:
+            # 🚀 สำหรับโหมด "detection" หรือ "segmentation"
+            # พาธใหม่ตามสเปก: /user/{email}/dataset_session/{project_type}/{Project}
+            # หมายเหตุ: นำค่าประเภทโปรเจกต์มาทำเป็นชื่อคอลเลกชันย่อยคั่นกลาง
+            doc_ref = worker_db.collection("user").document(email)\
+                        .collection("dataset_session").document(project_type)\
+                        .collection(project_name).document("info") # ใช้ document "info" หรือชื่อที่ต้องการเพื่อสร้างโครงสร้างพาธให้สมบูรณ์
+            
+            doc_ref.set({
+                "project": project_name,
+                "project_type": project_type,
+                "projectType": project_type,
+                "created_at": firestore.SERVER_TIMESTAMP
+            }, merge=True)
 
-            return jsonify({
-                "success": False,
-                "message": "email missing"
-            }), 400
+        resp_success = jsonify({"success": True, "message": "Project created successfully"})
+        resp_success.headers.add("Access-Control-Allow-Origin", "*")
+        return resp_success, 200
 
-        if not project_name:
-            return jsonify({
-                "success": False,
-                "message": "project missing"
-            }), 400
-
-        if not class_name:
-            return jsonify({
-                "success": False,
-                "message": "className missing"
-            }), 400
-
-        # -----------------------------
-        # Storage Path
-        # deviceId/project/class
-        # -----------------------------
-        folder_path = (
-            f"{email}/"
-            f"{project_name}/"
-            f"{class_name}"
-        )
-
-        # -----------------------------
-        # Count Images
-        # Firebase Storage
-        # -----------------------------
-        total_images = 0
-
-        blobs = bucket.list_blobs(
-            prefix=folder_path + "/"
-        )
-
-        for blob in blobs:
-
-            name = blob.name.lower()
-
-            if (
-                name.endswith(".jpg")
-                or name.endswith(".jpeg")
-                or name.endswith(".png")
-                or name.endswith(".webp")
-            ):
-                total_images += 1
-
-        # -----------------------------
-        # Create Project Document
-        # user/deviceId/dataset_session/project
-        # -----------------------------
-        project_ref = (
-            worker_db
-            .collection("user")
-            .document(email)
-            .collection("dataset_session")
-            .document(project_name)
-        )
-
-        project_ref.set({
-
-            "project":
-                project_name,
-
-            "created_at":
-                firestore.SERVER_TIMESTAMP  # type: ignore
-
-        }, merge=True)
-
-        # -----------------------------
-        # Create Class Document
-        # user/deviceId/dataset_session/project/class/className
-        # -----------------------------
-        class_ref = (
-            worker_db
-            .collection("user")
-            .document(email)
-            .collection("dataset_session")
-            .document(project_name)
-            .collection("class")
-            .document(class_name)
-        )
-
-        class_ref.set({
-
-            "label":
-                class_name,
-
-            "project":
-                project_name,
-
-            "resize_height":
-                resize_height,
-
-            "resize_width":
-                resize_width,
-
-            "total_images":
-                total_images,
-
-            "updated_at":
-                firestore.SERVER_TIMESTAMP  # type: ignore
-
-        })
-
-        return jsonify({
-
-            "success": True,
-
-            "message":
-                "Project created",
-            "email":
-                email,
-
-            "project":
-                project_name,
-
-            "class":
-                class_name,
-
-            "total_images":
-                total_images
-
-        })
-
-    except Exception as ex:
-
+    except Exception as e:
         traceback.print_exc()
-
-        return jsonify({
-
-            "success": False,
-
-            "message":
-                str(ex)
-
-        }), 500
+        resp_err = jsonify({"success": False, "error": str(e)})
+        resp_err.headers.add("Access-Control-Allow-Origin", "*")
+        return resp_err, 500
+#========================================    
 # delete class
 @app.route("/delete_class", methods=["POST"])
 def delete_class():
@@ -834,181 +930,172 @@ def delete_class():
             "message": str(e)
         })
 #===============================================
-@app.route("/get_projects", methods=["POST"])
-def get_projects():
+# ==========================================================
+# 🖼️ 1. Route สำหรับ Classification
+# พาธบันทึก: user/{email}/dataset_session/{project_name}/class/{class_name}
+# ==========================================================
+@app.route("/get_classification_projects", methods=["POST", "OPTIONS"])
+def get_classification_projects():
+    if request.method == "OPTIONS":
+        response = jsonify({"success": True})
+        response.headers.add("Access-Control-Allow-Origin", "*")
+        response.headers.add("Access-Control-Allow-Headers", "Content-Type,Authorization")
+        response.headers.add("Access-Control-Allow-Methods", "POST,OPTIONS")
+        return response, 200
 
     try:
-
-        data = request.get_json(silent=True) or {}
-
-        email = (
-            data.get("email", "")
-            .lower()
-            .strip()
-        )
-
+        body = request.get_json(silent=True) or {}
+        email = body.get("email")
         if not email:
+            return jsonify({"success": False, "message": "Missing email"}), 400
 
-            return jsonify({
+        projects_list = []
+        class_projects = {}
 
-                "success": False,
+        # ดึงผ่าน collection_group เพื่อความแม่นยำและทะลุผ่าน Virtual Document
+        class_groups = worker_db.collection_group("class").stream()
 
-                "message": "no email"
+        for doc in class_groups:
+            path_str = doc.reference.path
+            # กรองเฉพาะของอีเมลนี้ และต้องไม่อยู่ในกลุ่ม detection/segmentation
+            if f"user/{email}/dataset_session" in path_str and "detection" not in path_str and "segmentation" not in path_str:
+                parts = path_str.split("/")
+                if "dataset_session" in parts:
+                    idx = parts.index("dataset_session")
+                    project_name = parts[idx + 1]
+                    
+                    cls_data = doc.to_dict()
+                    img_count = cls_data.get("total_images", 0)
+                    r_width = cls_data.get("resize_width", 224)
+                    r_height = cls_data.get("resize_height", 224)
 
-            }), 400
+                    if project_name not in class_projects:
+                        class_projects[project_name] = {
+                            "project": project_name,
+                            "project_type": "classification",
+                            "resize_width": r_width,
+                            "resize_height": r_height,
+                            "classes": [],
+                            "total_images": 0
+                        }
+                    
+                    class_projects[project_name]["classes"].append({
+                        "project": project_name,
+                        "label": doc.id,
+                        "total_images": img_count
+                    })
+                    class_projects[project_name]["total_images"] += img_count
 
-        result = []
+        resp = jsonify({"success": True, "data": list(class_projects.values())})
+        resp.headers.add("Access-Control-Allow-Origin", "*")
+        return resp, 200
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e), "data": []}), 500
 
-        projects = (
-            worker_db
-            .collection("user")
-            .document(email)
-            .collection("dataset_session")
-            .stream()
-        )
 
-        for project_doc in projects:
+# ==========================================================
+# 🎯 2. Route สำหรับ Object Detection
+# พาธบันทึก: user/{email}/dataset_session/detection/{project_name}/info
+# ==========================================================
+@app.route("/get_detection_projects", methods=["POST", "OPTIONS"])
+def get_detection_projects():
+    if request.method == "OPTIONS":
+        response = jsonify({"success": True})
+        response.headers.add("Access-Control-Allow-Origin", "*")
+        response.headers.add("Access-Control-Allow-Headers", "Content-Type,Authorization")
+        response.headers.add("Access-Control-Allow-Methods", "POST,OPTIONS")
+        return response, 200
 
-            project_name = project_doc.id
-            project_data = project_doc.to_dict() or {}
+    try:
+        body = request.get_json(silent=True) or {}
+        email = body.get("email")
+        if not email:
+            return jsonify({"success": False, "message": "Missing email"}), 400
 
-            project_item = {
-
-                "project": project_name,
-                "resize_width": 0,
-                "resize_height": 0,
-                "created_at": str(
-                    project_data.get(
-                        "created_at", ""
-                    )
-                ),
-                "classes": []
-
-            }
-
-            classes = (
-                worker_db
-                .collection("user")
-                .document(email)
-                .collection("dataset_session")
-                .document(project_name)
-                .collection("class")
-                .stream()
-            )
-
-            total_project_images = 0
-            first_class = True
-
-            for class_doc in classes:
-
-                class_data = (
-                    class_doc.to_dict()
-                    or {}
-                )
-
-                if first_class:
-
-                    project_item[
-                        "resize_width"
-                    ] = class_data.get(
-                        "resize_width", 0
-                    )
-
-                    project_item[
-                        "resize_height"
-                    ] = class_data.get(
-                        "resize_height", 0
-                    )
-
-                    first_class = False
-
-                total_images = (
-                    class_data.get(
-                        "total_images", 0
-                    )
-                )
-
-                total_project_images += (
-                    total_images
-                )
-
-                project_item[
-                    "classes"
-                ].append({
-
-                    "project":
-                        project_name,
-
-                    "label":
-                        class_data.get(
-                            "label",
-                            class_doc.id
-                        ),
-
-                    "resize_width":
-                        class_data.get(
-                            "resize_width",
-                            0
-                        ),
-
-                    "resize_height":
-                        class_data.get(
-                            "resize_height",
-                            0
-                        ),
-
-                    "total_images":
-                        total_images,
-
-                    "updated_at":
-                        str(
-                            class_data.get(
-                                "updated_at",
-                                ""
-                            )
-                        )
-
+        projects_list = []
+        
+        # เจาะจงพาธตรงตัวตามโครงสร้าง Firebase คอลัมน์ "detection"
+        detection_folder_ref = worker_db.collection("user").document(email).collection("dataset_session").document("detection")
+        detection_projects = detection_folder_ref.list_collections()
+        
+        for p_coll in detection_projects:
+            project_name = p_coll.id
+            info_doc = p_coll.document("info").get()
+            
+            if info_doc.exists:
+                info_data = info_doc.to_dict()
+                projects_list.append({
+                    "project": project_name,
+                    "project_type": "detection" 
+                })
+            else:
+                projects_list.append({
+                    "project": project_name,
+                    "project_type": "detection" 
                 })
 
-            project_item[
-                "total_classes"
-            ] = len(
-                project_item["classes"]
-            )
+        resp = jsonify({"success": True, "data": projects_list})
+        resp.headers.add("Access-Control-Allow-Origin", "*")
+        return resp, 200
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e), "data": []}), 500
 
-            project_item[
-                "total_images"
-            ] = total_project_images
 
-            result.append(
-                project_item
-            )
+# ==========================================================
+# ⬡ 3. Route สำหรับ Segmentation
+# พาธบันทึก: user/{email}/dataset_session/segmentation/{project_name}/info
+# ==========================================================
+@app.route("/get_segmentation_projects", methods=["POST", "OPTIONS"])
+def get_segmentation_projects():
+    if request.method == "OPTIONS":
+        response = jsonify({"success": True})
+        response.headers.add("Access-Control-Allow-Origin", "*")
+        response.headers.add("Access-Control-Allow-Headers", "Content-Type,Authorization")
+        response.headers.add("Access-Control-Allow-Methods", "POST,OPTIONS")
+        return response, 200
 
-        return jsonify({
+    try:
+        body = request.get_json(silent=True) or {}
+        email = body.get("email")
+        if not email:
+            return jsonify({"success": False, "message": "Missing email"}), 400
 
-            "success": True,
+        projects_list = []
+        
+        # เจาะจงพาธตรงตัวตามโครงสร้าง Firebase คอลัมน์ "segmentation"
+        segmentation_folder_ref = worker_db.collection("user").document(email).collection("dataset_session").document("segmentation")
+        segmentation_projects = segmentation_folder_ref.list_collections()
+        
+        for p_coll in segmentation_projects:
+            project_name = p_coll.id
+            info_doc = p_coll.document("info").get()
+            
+            if info_doc.exists:
+                info_data = info_doc.to_dict()
+                projects_list.append({
+                    "project": project_name,
+                    "project_type": "segmentation",
+                    "resize_width": info_data.get("resize_width", 640),
+                    "resize_height": info_data.get("resize_height", 640),
+                    "total_images": info_data.get("total_images", 0),
+                    "classes": []
+                })
+            else:
+                projects_list.append({
+                    "project": project_name,
+                    "project_type": "segmentation",
+                    "resize_width": 640,
+                    "resize_height": 640,
+                    "total_images": 0,
+                    "classes": []
+                })
 
-            "count": len(result),
+        resp = jsonify({"success": True, "data": projects_list})
+        resp.headers.add("Access-Control-Allow-Origin", "*")
+        return resp, 200
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e), "data": []}), 500
 
-            "data": result
-
-        })
-
-    except Exception as ex:
-
-        traceback.print_exc()
-
-        return jsonify({
-
-            "success": False,
-
-            "message": str(ex)
-
-        }), 500
-
-#======================================================
-
-#======================================================
 @app.route("/train_dataset", methods=["POST"])
 def train_dataset():
 
@@ -1804,822 +1891,740 @@ def decode_base64(image_base64):
 
     return image
  #===================================================
+# Quota Exception
+# ============================================================
+class QuotaExceededError(Exception):
+    """โยน error นี้เมื่อ user เกินโควต้าของแผนตัวเอง"""
+    pass
+
+
+# ============================================================
+# ตรวจ + จอง (reserve) โควต้าแบบ atomic ด้วย Firestore Transaction
+# ป้องกันกรณีอัปโหลดพร้อมกันหลาย request จนนับ usage ผิด
+# ============================================================
+@firestore.transactional
+def _reserve_quota_txn(transaction, plan_ref, plans_col_ref, add_images, add_bytes):
+
+    plan_snap = plan_ref.get(transaction=transaction)
+
+    if not plan_snap.exists:
+        raise QuotaExceededError("ไม่พบข้อมูลแผนของผู้ใช้ (plan/select)")
+
+    plan_data = plan_snap.to_dict()
+    plan_name = plan_data.get("plan", "free")
+    usage = plan_data.get("usage", {})
+
+    current_images = usage.get("totalImages", 0)
+    current_bytes = usage.get("totalStorageBytes", 0)
+
+    limit_snap = plans_col_ref.document(plan_name).get(transaction=transaction)
+
+    if not limit_snap.exists:
+        raise QuotaExceededError(f"ไม่พบ config ของแผน '{plan_name}'")
+
+    limits = limit_snap.to_dict()
+    max_images = limits.get("maxImages")          # None = unlimited
+    max_storage = limits.get("maxStorageBytes")   # None = unlimited
+
+    if max_images is not None and (current_images + add_images) > max_images:
+        raise QuotaExceededError(
+            f"เกินโควต้าจำนวนรูปของแผน {plan_name} "
+            f"({current_images}/{max_images} รูป)"
+        )
+
+    if max_storage is not None and (current_bytes + add_bytes) > max_storage:
+        raise QuotaExceededError(
+            f"พื้นที่จัดเก็บไม่พอสำหรับแผน {plan_name} "
+            f"({current_bytes/1024/1024:.1f}MB / {max_storage/1024/1024:.1f}MB)"
+        )
+
+    # ผ่าน -> จองโควต้าไว้เลยในทรานแซคชันเดียวกัน
+    transaction.update(plan_ref, {
+        "usage.totalImages": firestore.Increment(add_images),
+        "usage.totalStorageBytes": firestore.Increment(add_bytes),
+        "usage.lastUpdated": firestore.SERVER_TIMESTAMP
+    })
+
+
+def reserve_quota(email, add_images, add_bytes):
+    """
+    เรียกก่อนอัปโหลดรูปทุกครั้ง (ทีละรูป)
+    ถ้าเกินโควต้า -> raise QuotaExceededError (ให้ route จับแล้วตอบ 403)
+    ถ้าผ่าน -> usage ของ user/{email}/plan/select ถูก +1 รูป และ +ขนาดไฟล์ ให้ทันที
+    """
+    plan_ref = (
+        worker_db.collection("user")
+        .document(email)
+        .collection("plan")
+        .document("select")
+    )
+
+    plans_col_ref = worker_db.collection("plans")
+    transaction = worker_db.transaction()
+
+    _reserve_quota_txn(transaction, plan_ref, plans_col_ref, add_images, add_bytes)
+
+
+# ============================================================
+# Single Capture
+# ============================================================
 def upload_single(data):
 
-    # ==========================
-    # Read Request
-    # ==========================
-
     email = data["email"]
-
     project = data["project"]
-
     class_name = data["className"]
-
-    resize_width = int(
-        data["resizeWidth"]
-    )
-
-    resize_height = int(
-        data["resizeHeight"]
-    )
-
-    camera_source = data.get(
-        "cameraSource",
-        "browser"
-    )
-
+    resize_width = int(data["resizeWidth"])
+    resize_height = int(data["resizeHeight"])
+    camera_source = data.get("cameraSource", "browser")
     image_base64 = data["image"]
 
-    # ==========================
-    # Decode
-    # ==========================
-
-    image = decode_base64(
-        image_base64
-    )
-
-    # ==========================
-    # Resize
-    # ==========================
-
-    image = resize_image(
-
-        image,
-
-        resize_width,
-
-        resize_height
-
-    )
-
-    # ==========================
-    # Calculate File Size
-    # ==========================
+    image = decode_base64(image_base64)
+    image = resize_image(image, resize_width, resize_height)
 
     buffer = io.BytesIO()
-
-    image.save(
-
-        buffer,
-
-        format="JPEG",
-
-        quality=95
-
-    )
-
+    image.save(buffer, format="JPEG", quality=95)
     file_size = buffer.tell()
 
-    # ==========================
-    # Upload Firebase Storage
-    # ==========================
+    # ------------------------------------------------
+    # ✅ เช็คโควต้าแผน "ก่อน" อัปโหลดขึ้น Storage จริง
+    # ------------------------------------------------
+    reserve_quota(email=email, add_images=1, add_bytes=file_size)
 
     upload_result = upload_image(
-
         image=image,
-
         email=email,
-
         project=project,
-
         class_name=class_name,
-
         camera_source=camera_source,
-
         image_type="original"
-
     )
-
-    # ==========================
-    # Save Image Document
-    # ==========================
 
     save_image_document(
-
         email=email,
-
         project=project,
-
         class_name=class_name,
-
         upload_result=upload_result,
-
         width=resize_width,
-
         height=resize_height,
-
         file_size=file_size,
-
         camera_source=camera_source,
-
         capture_mode="single",
-
         augmentation="original"
-
     )
-
-    # ==========================
-    # Update Firestore Summary
-    # ==========================
 
     summary = update_firestore(
-
         email=email,
-
         project=project,
-
         class_name=class_name,
-
         increase=1,
-
         total_size=file_size
-
     )
-
-    # ==========================
-    # Response
-    # ==========================
 
     return {
-
         "success": True,
-
         "captureMode": "single",
-
-        "filename":
-            upload_result["filename"],
-
-        "storagePath":
-            upload_result["storagePath"],
-
-        "imageUrl":
-            upload_result["imageUrl"],
-
-        "cameraSource":
-            camera_source,
-
-        "totalImages":
-            summary["totalImages"],
-
-        "classSize":
-            summary["classSize"],
-
-        "classSizeKB":
-            summary["classSizeKB"],
-
-        "classSizeMB":
-            summary["classSizeMB"],
-
-        "width":
-            resize_width,
-
-        "height":
-            resize_height,
-
-        "fileSize":
-            file_size,
-
-        "fileSizeKB":
-            round(file_size / 1024, 1)
-
+        "filename": upload_result["filename"],
+        "storagePath": upload_result["storagePath"],
+        "imageUrl": upload_result["imageUrl"],
+        "cameraSource": camera_source,
+        "totalImages": summary["totalImages"],
+        "classSize": summary["classSize"],
+        "classSizeKB": summary["classSizeKB"],
+        "classSizeMB": summary["classSizeMB"],
+        "width": resize_width,
+        "height": resize_height,
+        "fileSize": file_size,
+        "fileSizeKB": round(file_size / 1024, 1)
     }
- #===================================================
+
+
+# ============================================================
+# Burst Capture
+# ============================================================
 def upload_burst(data):
 
-    # ==========================
-    # Read Request
-    # ==========================
-
     email = data["email"]
-
     project = data["project"]
-
     class_name = data["className"]
-
-    resize_width = int(
-        data["resizeWidth"]
-    )
-
-    resize_height = int(
-        data["resizeHeight"]
-    )
-
-    camera_source = data.get(
-        "cameraSource",
-        "browser"
-    )
-
+    resize_width = int(data["resizeWidth"])
+    resize_height = int(data["resizeHeight"])
+    camera_source = data.get("cameraSource", "browser")
     images = data["images"]
 
     uploaded_files = []
-
     total_size = 0
-
-    # ==========================
-    # Upload Images
-    # ==========================
+    quota_message = None   # ถ้าเกินโควต้ากลางทาง จะหยุดแล้วเก็บข้อความไว้ตรงนี้
 
     for index, image_base64 in enumerate(images):
 
-        # ----------------------
-        # Decode
-        # ----------------------
-
-        image = decode_base64(
-            image_base64
-        )
-
-        # ----------------------
-        # Resize
-        # ----------------------
-
-        image = resize_image(
-
-            image,
-
-            resize_width,
-
-            resize_height
-
-        )
-
-        # ----------------------
-        # Calculate File Size
-        # ----------------------
+        image = decode_base64(image_base64)
+        image = resize_image(image, resize_width, resize_height)
 
         buffer = io.BytesIO()
-
-        image.save(
-
-            buffer,
-
-            format="JPEG",
-
-            quality=95
-
-        )
-
+        image.save(buffer, format="JPEG", quality=95)
         file_size = buffer.tell()
+
+        # ------------------------------------------------
+        # ✅ เช็คโควต้าทีละรูป ก่อนอัปโหลดรูปนั้นขึ้น Storage
+        #    ถ้ารูปที่ N เกินโควต้า -> หยุด burst ตรงนี้เลย
+        #    (รูปที่ 1..N-1 ที่อัปโหลดไปแล้วยังเก็บไว้ ไม่ rollback)
+        # ------------------------------------------------
+        try:
+            reserve_quota(email=email, add_images=1, add_bytes=file_size)
+        except QuotaExceededError as e:
+            quota_message = str(e)
+            break
 
         total_size += file_size
 
-        # ----------------------
-        # Upload Firebase Storage
-        # ----------------------
-
         upload_result = upload_image(
-
             image=image,
-
             email=email,
-
             project=project,
-
             class_name=class_name,
-
             camera_source=camera_source,
-
             image_type=f"burst_{index+1}"
-
         )
-
-        # ----------------------
-        # Save Firestore
-        # ----------------------
 
         save_image_document(
-
             email=email,
-
             project=project,
-
             class_name=class_name,
-
             upload_result=upload_result,
-
             width=resize_width,
-
             height=resize_height,
-
             file_size=file_size,
-
             camera_source=camera_source,
-
             capture_mode="burst",
-
             augmentation=f"burst_{index+1}"
-
         )
 
-        # ----------------------
-        # Response List
-        # ----------------------
-
         uploaded_files.append({
-
-            "type":
-                f"burst_{index+1}",
-
-            "filename":
-                upload_result["filename"],
-
-            "storagePath":
-                upload_result["storagePath"],
-
-            "imageUrl":
-                upload_result["imageUrl"],
-
-            "fileSize":
-                file_size,
-
-            "fileSizeKB":
-                round(file_size / 1024, 1)
-
+            "type": f"burst_{index+1}",
+            "filename": upload_result["filename"],
+            "storagePath": upload_result["storagePath"],
+            "imageUrl": upload_result["imageUrl"],
+            "fileSize": file_size,
+            "fileSizeKB": round(file_size / 1024, 1)
         })
 
-    # ==========================
-    # Update Firestore Summary
-    # ==========================
+    # ถ้าไม่มีรูปไหนอัปโหลดผ่านเลยสักรูป (โดนบล็อกตั้งแต่รูปแรก)
+    if not uploaded_files:
+        raise QuotaExceededError(quota_message or "ไม่สามารถอัปโหลดได้")
 
     summary = update_firestore(
-
         email=email,
-
         project=project,
-
         class_name=class_name,
-
-        increase=len(images),
+        increase=len(uploaded_files),
         total_size=total_size
-
     )
 
-    # ==========================
-    # Calculate Average Size
-    # ==========================
+    average_size = round(total_size / len(uploaded_files)) if uploaded_files else 0
 
-    average_size = (
-
-        round(total_size / len(images))
-
-        if images else 0
-
-    )
-
-    # ==========================
-    # Response
-    # ==========================
-
-    return {
-
+    result = {
         "success": True,
-
-        "captureMode":
-            "burst",
-
-        "uploaded":
-            len(images),
-
-        "cameraSource":
-            camera_source,
-
-        "width":
-            resize_width,
-
-        "height":
-            resize_height,
-
-
-        "totalImages":
-            summary["totalImages"],
-
-        "classSize":
-            summary["classSize"],
-
-        "classSizeKB":
-            summary["classSizeKB"],
-
-        "classSizeMB":
-            summary["classSizeMB"],
-
-
-        "totalSize":
-            total_size,
-
-        "totalSizeKB":
-            round(total_size / 1024, 1),
-
-        "averageSize":
-            average_size,
-
-        "averageSizeKB":
-            round(average_size / 1024, 1),
-
-        "files":
-            uploaded_files
-
+        "captureMode": "burst",
+        "uploaded": len(uploaded_files),
+        "cameraSource": camera_source,
+        "width": resize_width,
+        "height": resize_height,
+        "totalImages": summary["totalImages"],
+        "classSize": summary["classSize"],
+        "classSizeKB": summary["classSizeKB"],
+        "classSizeMB": summary["classSizeMB"],
+        "totalSize": total_size,
+        "totalSizeKB": round(total_size / 1024, 1),
+        "averageSize": average_size,
+        "averageSizeKB": round(average_size / 1024, 1),
+        "files": uploaded_files
     }
- #====================================================
+
+    # แจ้งฝั่ง frontend ว่า burst ถูกตัดตอนก่อนครบ เพราะเกินโควต้า
+    if quota_message:
+        result["quotaExceeded"] = True
+        result["quotaMessage"] = quota_message
+
+    return result
+
+
+# ============================================================
+# AI Dataset Generator
+# ============================================================
 def upload_generator(data):
 
-    # ==========================
-    # Read Request
-    # ==========================
-
     email = data["email"]
-
     project = data["project"]
-
     class_name = data["className"]
-
-    resize_width = int(
-        data["resizeWidth"]
-    )
-
-    resize_height = int(
-        data["resizeHeight"]
-    )
-
-    camera_source = data.get(
-        "cameraSource",
-        "browser"
-    )
-
+    resize_width = int(data["resizeWidth"])
+    resize_height = int(data["resizeHeight"])
+    camera_source = data.get("cameraSource", "browser")
     image_base64 = data["image"]
 
-    # ==========================
-    # Decode
-    # ==========================
+    image = decode_base64(image_base64)
+    image = resize_image(image, resize_width, resize_height)
 
-    image = decode_base64(
-        image_base64
-    )
-
-    # ==========================
-    # Resize
-    # ==========================
-
-    image = resize_image(
-
-        image,
-
-        resize_width,
-
-        resize_height
-
-    )
-
-    # ==========================
-    # Generate Images
-    # ==========================
-
-    generated_images = generate_images(
-        image
-    )
+    generated_images = generate_images(image)
 
     uploaded_files = []
-
     total_size = 0
-
-    # ==========================
-    # Upload Images
-    # ==========================
+    quota_message = None
 
     for image_type, img in generated_images:
 
-        # ----------------------
-        # Calculate File Size
-        # ----------------------
-
         buffer = io.BytesIO()
-
-        img.save(
-
-            buffer,
-
-            format="JPEG",
-
-            quality=95
-
-        )
-
+        img.save(buffer, format="JPEG", quality=95)
         file_size = buffer.tell()
+
+        # ------------------------------------------------
+        # ✅ เช็คโควต้าทีละรูปที่ generate ออกมา
+        # ------------------------------------------------
+        try:
+            reserve_quota(email=email, add_images=1, add_bytes=file_size)
+        except QuotaExceededError as e:
+            quota_message = str(e)
+            break
 
         total_size += file_size
 
-        # ----------------------
-        # Upload Firebase Storage
-        # ----------------------
-
         upload_result = upload_image(
-
             image=img,
-
             email=email,
-
             project=project,
-
             class_name=class_name,
-
             camera_source=camera_source,
-
             image_type=image_type
-
         )
 
-        # ----------------------
-        # Save Firestore
-        # ----------------------
-
         save_image_document(
-
             email=email,
-
             project=project,
-
             class_name=class_name,
-
             upload_result=upload_result,
-
             width=resize_width,
-
             height=resize_height,
-
             file_size=file_size,
-
             camera_source=camera_source,
-
             capture_mode="generator",
-
             augmentation=image_type
-
         )
 
         uploaded_files.append({
-
-            "type":
-                image_type,
-
-            "filename":
-                upload_result["filename"],
-
-            "storagePath":
-                upload_result["storagePath"],
-
-            "imageUrl":
-                upload_result["imageUrl"],
-
-            "fileSize":
-                file_size,
-
-            "fileSizeKB":
-                round(file_size / 1024, 1)
-
+            "type": image_type,
+            "filename": upload_result["filename"],
+            "storagePath": upload_result["storagePath"],
+            "imageUrl": upload_result["imageUrl"],
+            "fileSize": file_size,
+            "fileSizeKB": round(file_size / 1024, 1)
         })
 
-    # ==========================
-    # Update Firestore Summary
-    # ==========================
+    if not uploaded_files:
+        raise QuotaExceededError(quota_message or "ไม่สามารถอัปโหลดได้")
 
     summary = update_firestore(
-
         email=email,
-
         project=project,
-
         class_name=class_name,
-
-        increase=len(generated_images),
+        increase=len(uploaded_files),
         total_size=total_size
-
     )
 
-    # ==========================
-    # Calculate Average Size
-    # ==========================
+    average_size = round(total_size / len(uploaded_files)) if uploaded_files else 0
 
-    average_size = (
-
-        round(total_size / len(generated_images))
-
-        if generated_images else 0
-
-    )
-
-    # ==========================
-    # Response
-    # ==========================
-
-    return {
-
+    result = {
         "success": True,
-
-        "captureMode":
-            "generator",
-
-        "generated":
-            len(generated_images),
-
-        "cameraSource":
-            camera_source,
-
-        "width":
-            resize_width,
-
-        "height":
-            resize_height,
-
-
-        "totalImages":
-            summary["totalImages"],
-
-        "classSize":
-            summary["classSize"],
-
-        "classSizeKB":
-            summary["classSizeKB"],
-
-        "classSizeMB":
-            summary["classSizeMB"],
-
-
-        "totalSize":
-            total_size,
-
-        "totalSizeKB":
-            round(total_size / 1024, 1),
-
-        "averageSize":
-            average_size,
-
-        "averageSizeKB":
-            round(average_size / 1024, 1),
-
-        "files":
-            uploaded_files
-
+        "captureMode": "generator",
+        "generated": len(uploaded_files),
+        "cameraSource": camera_source,
+        "width": resize_width,
+        "height": resize_height,
+        "totalImages": summary["totalImages"],
+        "classSize": summary["classSize"],
+        "classSizeKB": summary["classSizeKB"],
+        "classSizeMB": summary["classSizeMB"],
+        "totalSize": total_size,
+        "totalSizeKB": round(total_size / 1024, 1),
+        "averageSize": average_size,
+        "averageSizeKB": round(average_size / 1024, 1),
+        "files": uploaded_files
     }
-#=====================================================
-@app.route(
-    "/upload_dataset_image",
-    methods=["POST"]
-)
+
+    if quota_message:
+        result["quotaExceeded"] = True
+        result["quotaMessage"] = quota_message
+
+    return result
+
+
+# ============================================================
+# Route
+# ============================================================
+@app.route("/upload_dataset_image", methods=["POST"])
 def upload_dataset_image():
 
     try:
-
         data = request.get_json(silent=True) or {}
 
         if not data:
+            return jsonify({"success": False, "message": "No JSON data"}), 400
 
-            return jsonify({
-
-                "success": False,
-
-                "message": "No JSON data"
-
-            }), 400
-
-        capture_mode = data.get(
-
-            "captureMode",
-
-            "single"
-
-        ).lower()
-
-
-        # ==========================
-        # Single Capture
-        # ==========================
+        capture_mode = data.get("captureMode", "single").lower()
 
         if capture_mode == "single":
-
             result = upload_single(data)
-
-
-        # ==========================
-        # Burst Capture
-        # ==========================
-
         elif capture_mode == "burst":
-
             result = upload_burst(data)
-
-
-        # ==========================
-        # AI Dataset Generator
-        # ==========================
-
         elif capture_mode == "generator":
-
             result = upload_generator(data)
-
-
-        # ==========================
-        # Unknown Mode
-        # ==========================
-
         else:
-
             return jsonify({
-
                 "success": False,
-
-                "message":
-
-                f"Unknown captureMode : {capture_mode}"
-
+                "message": f"Unknown captureMode : {capture_mode}"
             }), 400
-
 
         return jsonify(result)
 
+    # ------------------------------------------------
+    # ✅ เกินโควต้า -> ตอบ 403 แยกจาก error ทั่วไป (500)
+    #    ฝั่ง frontend เช็ค response.ok == False + message นี้
+    #    เพื่อแจ้งเตือนให้ user ไปหน้า /pricing
+    # ------------------------------------------------
+    except QuotaExceededError as qe:
+        return jsonify({
+            "success": False,
+            "message": str(qe),
+            "quotaExceeded": True
+        }), 403
 
     except Exception as ex:
-
         traceback.print_exc()
+        return jsonify({"success": False, "message": str(ex)}), 500
+
+
+# ============================================================
+# PLAN LIMITS CONFIG (ใช้ตอน seed collection "plans")
+# field ต้องตรงกับที่ _reserve_quota_txn อ่าน:
+#   limits.get("maxImages")
+#   limits.get("maxStorageBytes")
+# None = unlimited
+#
+# ⚠️ ชื่อ key ต้องตรงกับค่า field "plan" ที่เก็บจริงใน
+#    user/{email}/plan/select แบบตัวพิมพ์ใหญ่-เล็กเป๊ะๆ
+#    (จาก Firestore จริงตอนนี้คือ "Free")
+# ============================================================
+PLANS_SEED = {
+
+    "Free": {
+        "maxImages": 500,
+        "maxStorageBytes": 500 * 1024 * 1024,            # 500 MB
+    },
+
+    "Starter": {
+        "maxImages": 30000,
+        "maxStorageBytes": 30 * 1024 * 1024 * 1024,      # 30 GB
+    },
+
+    "Pro": {
+        "maxImages": 300000,
+        "maxStorageBytes": 150 * 1024 * 1024 * 1024,     # 150 GB
+    },
+
+    "Business": {
+        "maxImages": 1000000,
+        "maxStorageBytes": 500 * 1024 * 1024 * 1024,     # 500 GB
+    },
+
+}
+
+
+# ==========================================================
+# PLAN CONFIG สำหรับเขียนลง user/{email}/plan/select.limits
+# (ให้ตรงกับหน้า Pricing.jsx: storage / projects / images)
+# ==========================================================
+PLAN_CONFIG = {
+
+    "Free": {
+        "maxProjects": 1,
+        "maxImages": 500,
+        "storageBytes": 500 * 1024 * 1024,          # 500 MB
+    },
+
+    "Starter": {
+        "maxProjects": None,                         # Unlimited
+        "maxImages": 30000,                           # 30,000 Images / Month
+        "storageBytes": 30 * 1024 * 1024 * 1024,      # 30 GB
+    },
+
+    "Pro": {
+        "maxProjects": None,                          # Unlimited
+        "maxImages": 300000,                          # 300,000 Images / Month
+        "storageBytes": 150 * 1024 * 1024 * 1024,     # 150 GB
+    },
+
+    "Business": {
+        "maxProjects": None,                          # Unlimited
+        "maxImages": 1000000,                         # 1,000,000 Images / Month
+        "storageBytes": 500 * 1024 * 1024 * 1024,     # 500 GB
+    },
+
+}
+
+
+# ==========================================================
+# SEED / INIT PLANS COLLECTION
+# เรียกครั้งเดียว (หรือเรียกซ้ำได้ เพราะใช้ merge=True) เพื่อสร้าง
+# worker_db/plans/{planName}  ให้ reserve_quota() อ่านค่าถูกต้อง
+# 🔒 admin only -> ต้องแนบ header X-Admin-Key
+# ==========================================================
+@app.route("/init_plans", methods=["POST"])
+@require_admin_key
+def init_plans():
+
+    try:
+
+        plans_col_ref = worker_db.collection("plans")
+
+        created = []
+
+        for plan_name, limits in PLANS_SEED.items():
+
+            plan_doc_ref = plans_col_ref.document(plan_name)
+
+            plan_doc_ref.set({
+
+                "maxImages":
+                    limits["maxImages"],
+
+                "maxStorageBytes":
+                    limits["maxStorageBytes"],
+
+                "updated_at":
+                    firestore.SERVER_TIMESTAMP  # type: ignore
+
+            }, merge=True)
+
+            created.append(plan_name)
 
         return jsonify({
 
-            "success": False,
+            "status": "success",
 
-            "message": str(ex)
+            "message": "plans collection updated",
 
-        }), 500
-#===========================================
-@app.route("/export_project", methods=["POST"])
-def export_project():
-    try:
-        data = request.get_json(silent=True) or {}
-        email = data.get("email")
-        project = data.get("project")
+            "plans": created
 
-        if not email or not project:
-            return jsonify({
-                "success": False,
-                "message": "Missing email or project"
-            }), 400
-
-        # เพิ่ม "class" เข้าไปใน prefix ให้ตรงกับ storage จริง
-        prefix = f"{email}/{project}/class/"
-
-        blobs = list(bucket.list_blobs(prefix=prefix))
-
-        if not blobs:
-            return jsonify({
-                "success": False,
-                "message": "No files found"
-            }), 404
-
-        zip_buffer = BytesIO()
-
-        with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
-            for blob in blobs:
-                if blob.name.endswith("/"):
-                    continue
-
-                relative_path = blob.name[len(prefix):]
-                if not relative_path:
-                    continue
-
-                file_bytes = blob.download_as_bytes()
-                zip_file.writestr(relative_path, file_bytes)
-
-        zip_buffer.seek(0)
-
-        return send_file(
-            zip_buffer,
-            mimetype="application/zip",
-            as_attachment=True,
-            download_name=f"{project}.zip"
-        )
+        })
 
     except Exception as e:
+
         traceback.print_exc()
+
         return jsonify({
-            "success": False,
+            "status": "error",
             "message": str(e)
         }), 500
 
-#================= training job status ==========================
-# ================================================
-# TRAIN PROJECT
-# ================================================
- 
 
+# ==========================================================
+# (Optional) ดูค่า plans ปัจจุบันทั้งหมด เพื่อเช็คว่าตรงกับที่ตั้งใจไหม
+# 🔒 admin only -> ต้องแนบ header X-Admin-Key
+# ==========================================================
+@app.route("/get_plans", methods=["GET"])
+@require_admin_key
+def get_plans():
+
+    try:
+
+        result = {}
+
+        docs = worker_db.collection("plans").stream()
+
+        for doc in docs:
+
+            result[doc.id] = doc.to_dict()
+
+        return jsonify({
+
+            "status": "success",
+
+            "plans": result
+
+        })
+
+    except Exception as e:
+
+        traceback.print_exc()
+
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
+
+
+# ==========================================================
+# UPDATE PLAN (เรียกหลังจ่ายเงินสำเร็จที่หน้า /checkout)
+# แนะนำให้เรียกจาก backend/webhook หลัง confirm การจ่ายเงินจริง
+# ไม่ควรเรียกตรงจาก browser เพราะ ADMIN_SECRET_KEY จะหลุดจาก bundle
+# 🔒 admin only -> ต้องแนบ header X-Admin-Key
+# ==========================================================
+@app.route("/update_plan", methods=["POST"])
+@require_admin_key
+def update_plan():
+
+    try:
+
+        data = request.get_json(silent=True) or {}
+
+        email = (
+            data.get("email", "")
+            .lower()
+            .strip()
+        )
+
+        # เผื่อ frontend ส่งมาเป็น "Pro ⭐" ตัด emoji/space ออก
+        plan_name = (
+            data.get("plan", "")
+            .replace("⭐", "")
+            .strip()
+        )
+
+        if not email:
+            return jsonify({
+                "status": "error",
+                "message": "no email"
+            }), 400
+
+        if plan_name not in PLAN_CONFIG:
+            return jsonify({
+                "status": "error",
+                "message": f"invalid plan: {plan_name}"
+            }), 400
+
+        limits = PLAN_CONFIG[plan_name]
+
+        user_ref = (
+            worker_db
+            .collection("user")
+            .document(email)
+        )
+
+        if not user_ref.get().exists:
+            return jsonify({
+                "status": "error",
+                "message": "user not found"
+            }), 404
+
+        plan_ref = (
+            user_ref
+            .collection("plan")
+            .document("select")
+        )
+
+        new_expire = (
+            datetime.utcnow()
+            + timedelta(days=30)
+        )
+
+        # merge=True -> ไม่แตะ usage.totalImages / totalStorageBytes เดิม
+        plan_ref.set({
+
+            "email": email,
+
+            "plan": plan_name,
+
+            "status": "active",
+
+            "paymentStatus": "paid",
+
+            "paidAt":
+                firestore.SERVER_TIMESTAMP,
+
+            "expireAt": new_expire,
+
+            "limits": {
+
+                "maxProjects":
+                    limits["maxProjects"],
+
+                "maxImages":
+                    limits["maxImages"],
+
+                "storageBytes":
+                    limits["storageBytes"],
+
+            }
+
+        }, merge=True)
+
+        return jsonify({
+
+            "status": "success",
+
+            "message":
+                f"อัปเกรดเป็นแผน {plan_name} สำเร็จ",
+
+            "plan": plan_name,
+
+            "limits": limits
+
+        })
+
+    except Exception as e:
+
+        traceback.print_exc()
+
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
+
+#===========================================
+
+#================= training job status ==========================
+# ==========================================================
+# ไฟล์นี้คือ "ส่วนที่ต้องแก้ไข/เพิ่ม" ใน backend (Flask) เดิมของคุณ
+# ไม่ใช่ไฟล์สมบูรณ์ที่รันได้เดี่ยวๆ ให้ copy ส่วนที่เกี่ยวข้อง
+# ไปแทนที่/เพิ่มใน app.py เดิม
+#
+# ต้องติดตั้ง library เพิ่ม:
+#   pip install tensorflowjs tf2onnx onnx
+# ==========================================================
 from tensorflow.keras.applications import MobileNetV2  # type: ignore
 from tensorflow.keras import layers, models  # type: ignore
 from tensorflow.keras.optimizers import Adam  # type: ignore
 
-training_status = {}   # เก็บสถานะ in-memory: key = f"{email}/{project}"
+import tf2onnx
+# หมายเหตุ: ยังไม่รองรับ tfjs ใน service นี้ เพราะ tensorflowjs (python)
+# ชน dependency กับ tensorflow==2.12.0 (protobuf conflict)
+# วางแผนแยกเป็น service ต่างหากในอนาคต
 
+training_status = {}   # key = f"{email}/{project}"
+
+VALID_FORMATS = ("tfjs", "tflite", "onnx")
+# 'tfjs' ไม่ convert ในนี้โดยตรงแล้ว (เพราะ tensorflowjs ชน dependency
+# กับ tensorflow==2.12.0) แต่จะ save เป็น SavedModel แล้วเรียกไปที่
+# TFJS_SERVICE_URL (service แยกที่ pin เวอร์ชันของตัวเอง) ให้ convert ให้แทน
+TFJS_SERVICE_URL = os.environ.get("TFJS_SERVICE_URL")
+
+if not TFJS_SERVICE_URL:
+    raise RuntimeError("Missing TFJS_SERVICE_URL")
+
+
+# ==========================================================
+# 1) /train_project : เพิ่มรับ field "format"
+# ==========================================================
 @app.route("/train_project", methods=["POST"])
 def train_project():
     data = request.get_json(silent=True) or {}
     email = data.get("email")
     project = data.get("project")
+    export_format = data.get("format", "tflite")
+
+    if export_format not in VALID_FORMATS:
+        return jsonify({
+            "success": False,
+            "message": f"Invalid format, must be one of {VALID_FORMATS}"
+        }), 400
 
     if not email or not project:
         return jsonify({
@@ -2637,11 +2642,15 @@ def train_project():
         }), 404
 
     key = f"{email}/{project}"
-    training_status[key] = {"status": "running", "progress": 0}
+    training_status[key] = {
+        "status": "running",
+        "progress": 0,
+        "format": export_format
+    }
 
     thread = threading.Thread(
         target=run_training,
-        args=(email, project, blobs)
+        args=(email, project, blobs, export_format)
     )
     thread.start()
 
@@ -2660,30 +2669,30 @@ def train_status():
     ))
 
 
-def run_training(email, project, blobs):
+# ==========================================================
+# 2) run_training : เพิ่ม export_format และแตกกิ่ง convert ตอนจบ
+# ==========================================================
+def run_training(email, project, blobs, export_format):
     key = f"{email}/{project}"
     prefix = f"{email}/{project}/class/"
 
     try:
-        # ---------- 1. โหลดรูปตาม class ----------
+        # ---------- 1. โหลดรูปตาม class (เหมือนเดิมทุกอย่าง) ----------
         images = []
         labels = []
         class_names = []
 
         for blob in blobs:
-            # path รูปแบบ: {email}/{project}/class/{label}/{filename}
             relative = blob.name[len(prefix):]
             parts = relative.split("/")
 
             if len(parts) < 2:
-                continue  # ไม่ใช่ไฟล์รูปในโฟลเดอร์ class
+                continue
 
             label = parts[0]
             filename = parts[1]
 
-            if not filename.lower().endswith(
-                (".jpg", ".jpeg", ".png")
-            ):
+            if not filename.lower().endswith((".jpg", ".jpeg", ".png")):
                 continue
 
             if label not in class_names:
@@ -2710,7 +2719,7 @@ def run_training(email, project, blobs):
 
         training_status[key]["progress"] = 20
 
-        # ---------- 2. Build Model (Transfer Learning) ----------
+        # ---------- 2. Build Model (เหมือนเดิม) ----------
         base_model = MobileNetV2(
             input_shape=(224, 224, 3),
             include_top=False,
@@ -2732,7 +2741,7 @@ def run_training(email, project, blobs):
             metrics=["accuracy"]
         )
 
-        # ---------- 3. Train ----------
+        # ---------- 3. Train (เหมือนเดิม) ----------
         class ProgressCallback(tf.keras.callbacks.Callback):
             def on_epoch_end(self, epoch, logs=None):
                 logs = logs or {}
@@ -2754,18 +2763,84 @@ def run_training(email, project, blobs):
 
         training_status[key]["progress"] = 85
 
-        # ---------- 4. Convert -> TFLite ----------
-        converter = tf.lite.TFLiteConverter.from_keras_model(model)
-        tflite_model = converter.convert()
+        # ---------- 4. Convert -> ตาม format ที่เลือก ----------
+        model_dir = f"{email}/{project}/model/{export_format}"
 
-        # ---------- 5. Upload กลับ Storage ----------
-        model_path = f"{email}/{project}/model/model.tflite"
-        model_blob = bucket.blob(model_path)
-        model_blob.upload_from_string(
-            tflite_model,
-            content_type="application/octet-stream"
-        )
+        if export_format == "tflite":
+            converter = tf.lite.TFLiteConverter.from_keras_model(model)
+            tflite_model = converter.convert()
 
+            model_blob = bucket.blob(f"{model_dir}/model.tflite")
+            model_blob.upload_from_string(
+                tflite_model,
+                content_type="application/octet-stream"
+            )
+
+        elif export_format == "onnx":
+            spec = (tf.TensorSpec(
+                (None, 224, 224, 3), tf.float32, name="input"
+            ),)
+            output_path = "/tmp/model.onnx"
+
+            tf2onnx.convert.from_keras(
+                model,
+                input_signature=spec,
+                output_path=output_path
+            )
+
+            model_blob = bucket.blob(f"{model_dir}/model.onnx")
+            model_blob.upload_from_filename(output_path)
+
+        elif export_format == "tfjs":
+            # ไม่ convert ที่นี่ เพราะ tensorflowjs ชน dependency กับ
+            # tensorflow==2.12.0 (ดู requirements.txt ของ service นี้)
+            # แทนที่ด้วยการ save เป็น SavedModel แล้วส่งไปให้ service แยกแปลงให้
+
+            saved_model_dir = "/tmp/saved_model"
+            model.save(
+                saved_model_dir,
+                save_format="tf",
+                include_optimizer=False,
+                options=tf.saved_model.SaveOptions(
+                    experimental_custom_gradients=False
+                )
+            )
+
+            saved_model_prefix = f"{email}/{project}/model/saved_model/"
+            for root, _, files in os.walk(saved_model_dir):
+                for fname in files:
+                    local_path = os.path.join(root, fname)
+                    relative = os.path.relpath(local_path, saved_model_dir)
+                    blob = bucket.blob(
+                        f"{saved_model_prefix}{relative.replace(os.sep, '/')}"
+                    )
+                    blob.upload_from_filename(local_path)
+
+            training_status[key]["progress"] = 92
+
+            # เรียก service แยกให้ convert SavedModel -> tfjs ให้
+            resp = requests.post(
+                f"{TFJS_SERVICE_URL}/convert",
+                json={"email": email, "project": project},
+                timeout=300
+            )
+
+            try:
+                result = resp.json()
+            except ValueError:
+                raise RuntimeError(
+                    f"tfjs-converter service ตอบกลับผิดปกติ "
+                    f"(status {resp.status_code}): {resp.text[:300]}"
+                )
+
+            if not result.get("success"):
+                raise RuntimeError(
+                    f"tfjs conversion failed: {result.get('message')}"
+                )
+
+
+
+        # labels.json ใช้ร่วมกันทุก format
         labels_path = f"{email}/{project}/model/labels.json"
         labels_blob = bucket.blob(labels_path)
         labels_blob.upload_from_string(
@@ -2777,7 +2852,8 @@ def run_training(email, project, blobs):
             "status": "done",
             "progress": 100,
             "classes": class_names,
-            "num_images": len(images)
+            "num_images": len(images),
+            "format": export_format
         }
 
     except Exception as e:
@@ -2786,6 +2862,521 @@ def run_training(email, project, blobs):
             "status": "error",
             "message": str(e)
         }
+
+
+# ==========================================================
+# 3) /download_model : endpoint ใหม่ - zip ไฟล์โมเดล + labels ส่งกลับ
+# ==========================================================
+@app.route("/download_model", methods=["POST"])
+def download_model():
+    data = request.get_json(silent=True) or {}
+    email = data.get("email")
+    project = data.get("project")
+    export_format = data.get("format")
+
+    if not email or not project or export_format not in VALID_FORMATS:
+        return jsonify({
+            "success": False,
+            "message": "Invalid request"
+        }), 400
+
+    model_prefix = f"{email}/{project}/model/{export_format}/"
+    labels_path = f"{email}/{project}/model/labels.json"
+
+    blobs = list(bucket.list_blobs(prefix=model_prefix))
+    if not blobs:
+        return jsonify({
+            "success": False,
+            "message": "Model not found, กรุณา train ก่อน"
+        }), 404
+
+    zip_buffer = io.BytesIO()
+    with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+        for blob in blobs:
+            arcname = blob.name[len(model_prefix):]
+            zf.writestr(arcname, blob.download_as_bytes())
+
+        labels_blob = bucket.blob(labels_path)
+        if labels_blob.exists():
+            zf.writestr("labels.json", labels_blob.download_as_bytes())
+
+    zip_buffer.seek(0)
+
+    return send_file(
+        zip_buffer,
+        mimetype="application/zip",
+        as_attachment=True,
+        download_name=f"{project}_{export_format}.zip"
+    )
+
+# =========================================================
+# DELETE PROJECT
+# ลบทั้งโปรเจกต์:
+#   1) Storage   : ลบไฟล์ทุกไฟล์ใต้ path  {email}/{project}/...
+#                  เช่น /enthongsri@gmail.com/capcolor/...
+#   2) Firestore : ลบ document ที่ path
+#                  user/{email}/dataset_session/{project}
+#
+# วางต่อท้ายไฟล์ app.py เดิม (ใช้ตัวแปร bucket / worker_db
+# ที่ประกาศไว้แล้วด้านบนของไฟล์ ไม่ต้อง import เพิ่ม)
+# =========================================================
+@app.route("/delete_project", methods=["POST"])
+def delete_project():
+    try:
+        data = request.get_json(force=True) or {}
+
+        email = data.get("email")
+        project = data.get("project")
+
+        if not email or not project:
+            return jsonify({
+                "status": "error",
+                "message": "Missing email or project"
+            }), 400
+
+        # ---------------------------------------------------
+        # 1) ลบไฟล์ทั้งหมดใน Storage ใต้ path {email}/{project}/
+        # ---------------------------------------------------
+        prefix = f"{email}/{project}/"
+
+        blobs = list(bucket.list_blobs(prefix=prefix))
+
+        for blob in blobs:
+            blob.delete()
+
+        # ---------------------------------------------------
+        # 2) ลบ Firestore document:
+        #    user/{email}/dataset_session/{project}
+        # ---------------------------------------------------
+        doc_ref = (
+            worker_db
+            .collection("user")
+            .document(email)
+            .collection("dataset_session")
+            .document(project)
+        )
+
+        doc_ref.delete()
+
+        return jsonify({
+            "status": "ok",
+            "deleted_files": len(blobs)
+        })
+
+    except Exception as e:
+        traceback.print_exc()
+
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
+#===========================================================
+@app.route("/list_servers", methods=["GET"])
+@require_admin_key
+def list_servers():
+    try:
+        servers = []
+
+        docs = (
+            hub_db.collection("hub_system")
+            .document("server_pool")
+            .collection("servers")
+            .stream()
+        )
+
+        now = int(time.time())
+
+        for doc in docs:
+            data = doc.to_dict() or {}
+            last_heartbeat = data.get("last_heartbeat", 0)
+
+            # ไม่มี heartbeat เข้ามาเกิน 90 วิ ถือว่า offline
+            is_online = (now - last_heartbeat) <= 90
+
+            servers.append({
+                "server_id": doc.id,
+                "cloud_url": data.get("cloud_url", ""),
+                "status": "online" if is_online else "offline",
+                "active_users": data.get("active_users", 0),
+                "load_score": data.get("load_score", 0),
+                "last_heartbeat": last_heartbeat
+            })
+
+        servers.sort(key=lambda s: s["server_id"])
+
+        return jsonify({
+            "status": "success",
+            "servers": servers
+        })
+
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
+ #=======================================  
+# =========================================================
+# ENDPOINT: รับแจ้งชำระเงิน และบันทึกลง FIREBASE (UPDATE TYPE)
+# =========================================================
+@app.route("/api/payment/confirm", methods=["POST"])
+def confirm_payment():
+    try:
+        # 1. ดึงข้อมูล Text จาก FormData
+        email = request.form.get("email")
+        amount = request.form.get("amount")
+        bank = request.form.get("bank")
+        transfer_time = request.form.get("transfer_time")
+
+        # ตรวจสอบค่าห้ามว่าง
+        if not email or not amount or not bank or not transfer_time:
+            return jsonify({"error": "Missing required text fields"}), 400
+
+        # 2. ดึงไฟล์รูปภาพสลิป
+        if "slip" not in request.files:
+            return jsonify({"error": "Missing slip image file"}), 400
+        
+        file = request.files["slip"]
+        if not file or file.filename == "":
+            return jsonify({"error": "No file selected"}), 400
+
+        # ป้องกัน Pylance แจ้งเตือนเรื่อง Type "str | None"
+        filename = file.filename if file.filename is not None else "slip.jpg"
+        file_ext = os.path.splitext(filename)[1] or ".jpg"
+        unique_filename = f"{uuid.uuid4()}{file_ext}"
+
+        # 3. อัปโหลดรูปสลิปขึ้น Firebase Storage (worker_app)
+        # ปลายทาง path -> /{email}/"payment"/{filename}
+        storage_path = f"{email}/payment/{unique_filename}"
+        blob = bucket.blob(storage_path)
+        
+        # อ่านไฟล์และกำหนด Content-Type แบบปลอดภัยจาก None
+        file_stream = file.read()
+        content_type = file.content_type if file.content_type is not None else "image/jpeg"
+        
+        blob.upload_from_string(file_stream, content_type=content_type)
+        
+        # ทำการสิทธิ์เปิดดูรูปภาพผ่านลิงก์สาธารณะ
+        blob.make_public()
+        slip_url = blob.public_url
+
+        # 4. บันทึกข้อมูลอื่นๆ ลง Firestore (worker_db)
+        # ปลายทาง path -> /user/{email}/"payment"/"data"/records/{random_id}
+        payment_data = {
+            "amount": float(amount),
+            "bank": bank,
+            "transfer_time": transfer_time,
+            "slip_url": slip_url,
+            "storage_path": storage_path,
+            "created_at": firestore.SERVER_TIMESTAMP,
+            "status": "pending"  # ตั้งสถานะเริ่มต้นรอการตรวจสอบ
+        }
+       #doc_ref = worker_db.collection("user").document(email).collection("payment").document("data").collection("records").document()
+        doc_ref = worker_db.collection("user").document(email).collection("payment").document()
+        doc_ref.set(payment_data)
+
+        return jsonify({
+            "message": "Payment confirmation submitted successfully",
+            "doc_id": doc_ref.id,
+            "slip_url": slip_url
+        }), 200
+
+    except Exception as e:
+        print("--- PAYMENT SUBMIT ERROR ---")
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500     
+# =========================================================
+# LIST CLASS IMAGES
+#   Storage path: {email}/{project}/class/{className}/...
+#   ส่งกลับรูปแบบ pagination รอบละ `limit` รูป (default 50)
+#
+# วางต่อท้ายไฟล์ app.py เดิม (ใช้ bucket ที่ประกาศไว้แล้ว
+# ไม่ต้อง import เพิ่ม เพราะ timedelta ถูก import ไว้แล้วด้านบน)
+# =========================================================
+@app.route("/list_class_images", methods=["POST"])
+def list_class_images():
+    try:
+        data = request.get_json(force=True) or {}
+
+        email = data.get("email")
+        project = data.get("project")
+        class_name = data.get("className")
+        offset = int(data.get("offset", 0))
+        limit = int(data.get("limit", 50))
+
+        if not email or not project or not class_name:
+            return jsonify({
+                "status": "error",
+                "message": "Missing email, project or className"
+            }), 400
+
+        prefix = f"{email}/{project}/class/{class_name}/"
+
+        all_blobs = list(bucket.list_blobs(prefix=prefix))
+        all_blobs.sort(key=lambda b: b.name)
+
+        page_blobs = all_blobs[offset: offset + limit]
+
+        images = []
+
+        for blob in page_blobs:
+            file_name = blob.name.split("/")[-1]
+
+            # signed url ใช้แสดงรูปได้ชั่วคราว (2 ชม.) โดยไม่ต้องเปิด public bucket
+            url = blob.generate_signed_url(
+                expiration=timedelta(hours=2)
+            )
+
+            images.append({
+                "name": file_name,
+                "url": url
+            })
+
+        has_more = (offset + limit) < len(all_blobs)
+
+        return jsonify({
+            "status": "ok",
+            "images": images,
+            "total": len(all_blobs),
+            "hasMore": has_more
+        })
+
+    except Exception as e:
+        traceback.print_exc()
+
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
+
+
+# =========================================================
+# DELETE SINGLE IMAGE
+#   Storage  : {email}/{project}/class/{className}/{fileName}
+#   Firestore: {email}/{project}/class/{className}
+#              (ลด total_images -1 และตัดชื่อไฟล์ออกจาก
+#               field "images" ถ้ามีการเก็บ array ไว้)
+# =========================================================
+@app.route("/delete_image", methods=["POST"])
+def delete_image():
+    try:
+        data = request.get_json(force=True) or {}
+
+        email = data.get("email")
+        project = data.get("project")
+        class_name = data.get("className")
+        file_name = data.get("fileName")
+
+        if not email or not project or not class_name or not file_name:
+            return jsonify({
+                "status": "error",
+                "message": "Missing email, project, className or fileName"
+            }), 400
+
+        # ---------------------------------------------------
+        # 1) ลบไฟล์รูปจาก Storage
+        # ---------------------------------------------------
+        blob_path = f"{email}/{project}/class/{class_name}/{file_name}"
+        blob = bucket.blob(blob_path)
+
+        if blob.exists():
+            blob.delete()
+
+        # ---------------------------------------------------
+        # 2) อัปเดต Firestore document ของ class นี้
+        #    path: {email}/{project}/class/{className}
+        #    (ไม่ให้ error ตรงนี้ทำให้ทั้ง request fail
+        #     เพราะไฟล์ถูกลบออกจาก Storage สำเร็จไปแล้ว)
+        # ---------------------------------------------------
+        try:
+            class_ref = (
+                worker_db
+                .collection("user")
+                .document(email)
+                .collection("dataset_session")
+                .document(project)
+                .collection("class")
+                .document(class_name)
+            )
+
+            # ลบ document รูปนี้ออกจาก subcollection images (สมมติ doc id = fileName)
+            class_ref.collection("images").document(file_name).delete()
+
+            # ลด total_images บน class doc เอง (ถ้ามี field นี้เก็บอยู่)
+            class_ref.update({
+                "total_images": firestore.Increment(-1)
+            })
+
+        except Exception:
+            traceback.print_exc()
+
+        return jsonify({
+            "status": "ok"
+        })
+
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500  
+#========================================================     
+@app.route("/api/upload_dataset", methods=["POST", "OPTIONS"])
+def upload_dataset():
+    # 🌟 ดักจับ Preflight Request จากเบราว์เซอร์ (ฝั่ง React)
+    if request.method == "OPTIONS":
+        response = jsonify({"success": True})
+        response.headers.add("Access-Control-Allow-Origin", "*")
+        response.headers.add("Access-Control-Allow-Headers", "Content-Type,Authorization")
+        response.headers.add("Access-Control-Allow-Methods", "POST,OPTIONS")
+        return response, 200
+
+    try:
+        data = request.json
+        if not data:
+            resp_err = jsonify({"error": "Missing request body"})
+            resp_err.headers.add("Access-Control-Allow-Origin", "*")
+            return resp_err, 400
+
+        email = data.get("email")
+        project = data.get("project_name")
+        class_name = data.get("class_name")
+        aug_mode = data.get("aug_mode", "original")
+        image_data = data.get("image_data")  # รับ Base64 สตริง
+        bounding_boxes = data.get("bounding_boxes", [])
+        
+        # 📥 รับขนาดหน้าจอ Canvas ที่ส่งมาจาก React เพิ่มเติม
+        canvas_width = data.get("canvas_width")
+        canvas_height = data.get("canvas_height")
+
+        if not all([email, project, class_name, image_data]):
+            resp_err = jsonify({"error": "Missing required fields (email, project_name, class_name, image_data)"})
+            resp_err.headers.add("Access-Control-Allow-Origin", "*")
+            return resp_err, 400
+
+        # ---------------------------------------------------------
+        # 1. จัดการแปลง Base64 และบันทึกลง Firebase Storage
+        # Path -> /{email}/{project}/{class}/{filename}.jpg
+        # ---------------------------------------------------------
+        if "," in image_data:
+            header, base64_str = image_data.split(",", 1)
+        else:
+            base64_str = image_data
+
+        # Decode สตริง Base64 กลับมาเป็นไบนารีไฟล์ภาพ
+        image_bytes = base64.b64decode(base64_str)
+        
+        # ตั้งชื่อไฟล์แบบไม่ซ้ำกันด้วย UUID พร้อมบันทึกเวลา (ไม่มีการวางทับรูปเก่า)
+        filename = f"{int(time.time())}_{uuid.uuid4().hex[:8]}.jpg"
+        
+        # ประกอบ Path สำหรับเซฟรูปภาพลง Storage
+        storage_path = f"{email}/{project}/{class_name}/{filename}"
+        
+        # อัปโหลดขึ้น Firebase Storage
+        blob = bucket.blob(storage_path)
+        blob.upload_from_string(image_bytes, content_type="image/jpeg")
+        
+        # ทำให้รูปเข้าถึงได้ผ่าน Public URL
+        blob.make_public()
+        image_url = blob.public_url
+
+        # ---------------------------------------------------------
+        # 2. บันทึกข้อมูลพิกัดและรายละเอียดอื่นลง Firestore
+        # Path -> /user/{email}/dataset_session/{project}/class/{class}/images/{image_id}
+        # ---------------------------------------------------------
+        doc_ref = worker_db.collection("user").document(email) \
+                           .collection("dataset_session").document(project) \
+                           .collection("class").document(class_name) \
+                           .collection("images").document(filename.split(".")[0])
+
+        firestore_payload = {
+            "image_filename": filename,
+            "storage_path": storage_path,
+            "image_url": image_url,
+            "aug_mode": aug_mode,
+            "canvas_width_at_capture": canvas_width,   # บันทึกขนาด Canvas ไว้เช็กสเกลพิกัด
+            "canvas_height_at_capture": canvas_height,
+            "bounding_boxes": bounding_boxes,
+            "timestamp": datetime.utcnow()
+        }
+
+        doc_ref.set(firestore_payload)
+
+        # 🌟 ส่ง Response พร้อมแนบ Access-Control-Allow-Origin เสมอ
+        resp_success = jsonify({
+            "success": True,
+            "message": "Dataset saved successfully",
+            "storage_path": storage_path,
+            "image_url": image_url
+        })
+        resp_success.headers.add("Access-Control-Allow-Origin", "*")
+        return resp_success, 200
+
+    except Exception as e:
+        print(traceback.format_exc())
+        resp_err = jsonify({"error": str(e)})
+        resp_err.headers.add("Access-Control-Allow-Origin", "*")
+        return resp_err, 500 
+# =========================================================
+# UPDATE PROJECT TYPE (เพิ่มใหม่เพื่อให้ React เรียกใช้ได้)
+# =========================================================
+@app.route("/update_project_type", methods=["POST", "OPTIONS"])
+def update_project_type():
+    # จัดการกรณี Preflight request จากบราวเซอร์ (CORS OPTIONS)
+    if request.method == "OPTIONS":
+        return jsonify({"success": True}), 200
+
+    try:
+        data = request.get_json(silent=True) or {}
+        
+        email = data.get("email", "").lower().strip()
+        project_name = data.get("project", "").strip()
+        project_type = data.get("projectType", "").strip() # รับค่าประเภท เช่น 'Premium', 'Standard'
+
+        # 1. Validation เช็คความถูกต้องของข้อมูล
+        if not email or not project_name or not project_type:
+            return jsonify({
+                "success": False,
+                "message": "Missing email, project, or projectType"
+            }), 400
+
+        # 2. ค้นหาเอกสารอ้างอิงโปรเจกต์ในคอลเลกชัน dataset_session
+        project_ref = (
+            worker_db
+            .collection("user")
+            .document(email)
+            .collection("dataset_session")
+            .document(project_name)
+        )
+
+        # ตรวจสอบว่ามีโปรเจกต์นี้อยู่จริงไหม
+        if not project_ref.get().exists:
+            return jsonify({
+                "success": False,
+                "message": f"Project '{project_name}' not found."
+            }), 404
+
+        # 3. อัปเดตข้อมูลประเภทโปรเจกต์เข้าไปใน Firestore
+        project_ref.update({
+            "projectType": project_type,
+            "updated_at": firestore.SERVER_TIMESTAMP
+        })
+
+        print(f"✅ Project '{project_name}' of {email} updated to {project_type}")
+
+        return jsonify({
+            "success": True,
+            "message": "Project type updated successfully",
+            "project": project_name,
+            "projectType": project_type
+        })
+
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({
+            "success": False,
+            "message": str(e)
+        }), 500 
 # =========================================================
 # RUN
 # ======================================================
