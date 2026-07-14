@@ -1016,7 +1016,7 @@ def get_detection_projects():
         
         # เจาะจงพาธตรงตัวตามโครงสร้าง Firebase คอลัมน์ "detection"
         detection_folder_ref = worker_db.collection("user").document(email).collection("dataset_session").document("detection")
-         detection_projects = detection_folder_ref.collections()
+        detection_projects = detection_folder_ref.list_collections()
         
         for p_coll in detection_projects:
             project_name = p_coll.id
@@ -1026,12 +1026,20 @@ def get_detection_projects():
                 info_data = info_doc.to_dict()
                 projects_list.append({
                     "project": project_name,
-                    "project_type": "detection" 
+                    "project_type": "detection",
+                    "resize_width": info_data.get("resize_width", 640),
+                    "resize_height": info_data.get("resize_height", 640),
+                    "total_images": info_data.get("total_images", 0),
+                    "classes": []
                 })
             else:
                 projects_list.append({
                     "project": project_name,
-                    "project_type": "detection" 
+                    "project_type": "detection",
+                    "resize_width": 640,
+                    "resize_height": 640,
+                    "total_images": 0,
+                    "classes": []
                 })
 
         resp = jsonify({"success": True, "data": projects_list})
@@ -1064,8 +1072,7 @@ def get_segmentation_projects():
         
         # เจาะจงพาธตรงตัวตามโครงสร้าง Firebase คอลัมน์ "segmentation"
         segmentation_folder_ref = worker_db.collection("user").document(email).collection("dataset_session").document("segmentation")
-        segmentation_projects = segmentation_folder_ref.collections()
-        
+        segmentation_projects = segmentation_folder_ref.list_collections()
         
         for p_coll in segmentation_projects:
             project_name = p_coll.id
