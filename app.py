@@ -853,7 +853,6 @@ def create_project():
             resp.headers.add("Access-Control-Allow-Origin", "*")
             return resp, 400
 
-        # 🎯 แตกกิ่งตามสเปก Workflow ใหม่ที่คุณระบุมา
         if project_type == "classification":
             class_name = body.get("className")
             width = body.get("resize_width", 224)
@@ -868,7 +867,7 @@ def create_project():
             doc_ref = worker_db.collection("user").document(email)\
                         .collection("dataset_session").document(project_name)\
                         .collection("class").document(class_name)
-            
+
             doc_ref.set({
                 "label": class_name,
                 "total_images": 0,
@@ -880,16 +879,26 @@ def create_project():
 
         else:
             # 🚀 สำหรับโหมด "detection" หรือ "segmentation"
-            # พาธใหม่ตามสเปก: /user/{email}/dataset_session/{project_type}/{Project}
-            # หมายเหตุ: นำค่าประเภทโปรเจกต์มาทำเป็นชื่อคอลเลกชันย่อยคั่นกลาง
-            doc_ref = worker_db.collection("user").document(email)\
-                        .collection("dataset_session").document(project_type)\
-                        .collection(project_name).document("info") # ใช้ document "info" หรือชื่อที่ต้องการเพื่อสร้างโครงสร้างพาธให้สมบูรณ์
-            
+            # ✅ แก้ให้ตรงกับ path จริงที่ /api/upload_dataset เขียน:
+            #    user/{email}/detection/{project}
+            #    user/{email}/segmentation/{project}
+            # (project_type ต้องเป็น "detection" หรือ "segmentation" เป๊ะๆ
+            #  ให้ตรงกับชื่อ collection ที่ /api/upload_dataset ใช้)
+            width = body.get("resize_width", 640)
+            height = body.get("resize_height", 640)
+
+            collection_name = project_type  # "detection" | "segmentation"
+
+            doc_ref = worker_db.collection("user").document(email) \
+                        .collection(collection_name).document(project_name)
+
             doc_ref.set({
                 "project": project_name,
                 "project_type": project_type,
                 "projectType": project_type,
+                "total_images": 0,
+                "resize_width": width,
+                "resize_height": height,
                 "created_at": firestore.SERVER_TIMESTAMP
             }, merge=True)
 
@@ -1002,9 +1011,9 @@ def get_classification_projects():
         return jsonify({"success": False, "error": str(e), "data": []}), 500
 
 
-# ==========================================================
+ # ==========================================================
 # 🎯 2. Route สำหรับ Object Detection
-# พาธบันทึก: user/{email}/dataset_session/detection/{project_name}/info
+# พาธบันทึก: user/{email}/detection/{project_name}
 # ==========================================================
 @app.route("/get_detection_projects", methods=["POST", "OPTIONS"])
 def get_detection_projects():
@@ -1022,45 +1031,33 @@ def get_detection_projects():
             return jsonify({"success": False, "message": "Missing email"}), 400
 
         projects_list = []
-        
-        # เจาะจงพาธตรงตัวตามโครงสร้าง Firebase คอลัมน์ "detection"
-        detection_folder_ref = worker_db.collection("user").document(email).collection("dataset_session").document("detection")
-        detection_projects = detection_folder_ref.collections() # ดึงเอกสารย่อยทั้งหมดใน collection ของ detection
-        
-        for p_coll in detection_projects:
-            project_name = p_coll.id
-            info_doc = p_coll.document("info").get()
-            
-            if info_doc.exists:
-                info_data = info_doc.to_dict()
-                projects_list.append({
-                    "project": project_name,
-                    "project_type": "detection",
-                    "resize_width": info_data.get("resize_width", 640),
-                    "resize_height": info_data.get("resize_height", 640),
-                    "total_images": info_data.get("total_images", 0),
-                    "classes": []
-                })
-            else:
-                projects_list.append({
-                    "project": project_name,
-                    "project_type": "detection",
-                    "resize_width": 640,
-                    "resize_height": 640,
-                    "total_images": 0,
-                    "classes": []
-                })
+
+        # ✅ อ่านตรงจาก user/{email}/detection/{project} (ตรงกับที่ create_project
+        #    และ /api/upload_dataset เขียนจริง)
+        detection_docs = (
+            worker_db.collection("user").document(email)
+            .collection("detection").stream()
+        )
+
+        for doc in detection_docs:
+            data = doc.to_dict() or {}
+            projects_list.append({
+                "project": doc.id,
+                "project_type": "detection",
+                "resize_width": data.get("resize_width", 640),
+                "resize_height": data.get("resize_height", 640),
+                "total_images": data.get("total_images", 0),
+                "classes": []
+            })
 
         resp = jsonify({"success": True, "data": projects_list})
         resp.headers.add("Access-Control-Allow-Origin", "*")
         return resp, 200
     except Exception as e:
         return jsonify({"success": False, "error": str(e), "data": []}), 500
-
-
 # ==========================================================
 # ⬡ 3. Route สำหรับ Segmentation
-# พาธบันทึก: user/{email}/dataset_session/segmentation/{project_name}/info
+# พาธบันทึก: user/{email}/segmentation/{project_name}
 # ==========================================================
 @app.route("/get_segmentation_projects", methods=["POST", "OPTIONS"])
 def get_segmentation_projects():
@@ -1078,34 +1075,23 @@ def get_segmentation_projects():
             return jsonify({"success": False, "message": "Missing email"}), 400
 
         projects_list = []
-        
-        # เจาะจงพาธตรงตัวตามโครงสร้าง Firebase คอลัมน์ "segmentation"
-        segmentation_folder_ref = worker_db.collection("user").document(email).collection("dataset_session").document("segmentation")
-        segmentation_projects = segmentation_folder_ref.collections()
-        
-        for p_coll in segmentation_projects:
-            project_name = p_coll.id
-            info_doc = p_coll.document("info").get()
-            
-            if info_doc.exists:
-                info_data = info_doc.to_dict()
-                projects_list.append({
-                    "project": project_name,
-                    "project_type": "segmentation",
-                    "resize_width": info_data.get("resize_width", 640),
-                    "resize_height": info_data.get("resize_height", 640),
-                    "total_images": info_data.get("total_images", 0),
-                    "classes": []
-                })
-            else:
-                projects_list.append({
-                    "project": project_name,
-                    "project_type": "segmentation",
-                    "resize_width": 640,
-                    "resize_height": 640,
-                    "total_images": 0,
-                    "classes": []
-                })
+
+        # ✅ อ่านตรงจาก user/{email}/segmentation/{project}
+        segmentation_docs = (
+            worker_db.collection("user").document(email)
+            .collection("segmentation").stream()
+        )
+
+        for doc in segmentation_docs:
+            data = doc.to_dict() or {}
+            projects_list.append({
+                "project": doc.id,
+                "project_type": "segmentation",
+                "resize_width": data.get("resize_width", 640),
+                "resize_height": data.get("resize_height", 640),
+                "total_images": data.get("total_images", 0),
+                "classes": []
+            })
 
         resp = jsonify({"success": True, "data": projects_list})
         resp.headers.add("Access-Control-Allow-Origin", "*")
@@ -3462,7 +3448,7 @@ def upload_dataset():
                 "error": "Missing required fields (email, project_name, class_name, image_data)"
             })), 400
 
-        # ---------------------------------------------------------
+        # -------------------------------------------------- 
         # 1. Decode base64 -> PIL Image (แปลงเป็น RGB เผื่อ PNG มี alpha channel)
         # ---------------------------------------------------------
         if "," in image_data:
