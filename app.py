@@ -21,8 +21,11 @@ from firebase_admin import credentials, firestore, storage
 from PIL import (
     Image,
     ImageEnhance,
-    ImageChops
+    ImageChops,
+    ImageOps
 )
+
+ 
 from io import BytesIO
 import uuid
 import base64
@@ -41,6 +44,12 @@ import io
 import tempfile
 import threading
 import traceback
+
+ 
+ 
+import math
+ 
+ 
 
  
 
@@ -3228,10 +3237,205 @@ def delete_image():
             "status": "error",
             "message": str(e)
         }), 500  
-#========================================================     
+#===================keep dataset =====================================     
+"""
+อัปเดต /api/upload_dataset ให้รองรับ DetectionCapture.jsx อย่างสมบูรณ์
+
+ต้องติดตั้งเพิ่ม: pip install Pillow --break-system-packages
+
+การเปลี่ยนแปลงหลัก 2 จุด:
+1. normalize_boxes_to_image_space() — แปลงพิกัดกล่องจากพื้นที่ container
+   (canvas_width/canvas_height ที่มี letterboxing จาก object-fit: contain)
+   ให้เป็นพิกัดจริงบนภาพ (image.width/image.height)
+2. apply_geometric_augmentation() + คำนวณกล่องใหม่ตามภาพที่ถูกแปลง
+   — เฉพาะโหมด geometric (rotate/zoom/flip) เท่านั้น
+   ส่วนโหมด pixel-level (grayscale/blur/brightness/contrast/saturation)
+   ฝั่ง React แปลงภาพจริงมาก่อนส่งแล้ว (ดู applyPixelAugmentation ใน DetectionCapture.jsx)
+   ที่นี่แค่ normalize พิกัดกล่องอย่างเดียว ไม่ต้องแปลงภาพซ้ำ
+"""
+
+
+
+# Pillow 10+ ลบค่าคงที่ระดับบน (Image.BICUBIC) ออกแล้ว ต้องใช้ Image.Resampling.BICUBIC แทน
+# บล็อกนี้รองรับได้ทั้ง Pillow เวอร์ชันเก่าและใหม่
+try:
+    RESAMPLE_BICUBIC = Image.Resampling.BICUBIC
+except AttributeError:
+    RESAMPLE_BICUBIC = getattr(Image, "BICUBIC")
+
+    
+
+# โหมดที่ยังต้องให้ backend แปลงภาพจริง (กระทบตำแหน่งกล่อง จึงต้องคำนวณกล่องใหม่ด้วย)
+GEOMETRIC_MODES = {"rotation_-10", "rotation_10", "zoom_in", "flip_horizontal"}
+
+# โหมดที่ฝั่ง React แปลงภาพจริงมาก่อนส่งแล้ว (ไม่กระทบตำแหน่งกล่อง)
+PIXEL_LEVEL_MODES = {
+    "grayscale", "blur",
+    "brightness_dark", "brightness_bright",
+    "contrast_low", "contrast_high",
+    "saturation_low", "saturation_high",
+}
+
+
+def normalize_boxes_to_image_space(boxes, canvas_w, canvas_h, img_w, img_h):
+    """
+    กล่องที่ React ส่งมาอ้างอิงพิกัดพิกเซลของ container (object-fit: contain)
+    ซึ่งถ้าอัตราส่วนภาพกับ container ไม่เท่ากัน จะมีแถบว่าง (letterbox) ซ้าย-ขวา หรือ บน-ล่าง
+    ฟังก์ชันนี้แปลงกลับเป็นพิกัดจริงบนไฟล์ภาพ (หน่วยพิกเซลของภาพจริง)
+    """
+    if not canvas_w or not canvas_h or canvas_w <= 0 or canvas_h <= 0:
+        # ไม่มีข้อมูล container ให้ fallback คืนพิกัดเดิม (เผื่อ client เก่าไม่ส่งมา)
+        return boxes
+
+    scale = min(canvas_w / img_w, canvas_h / img_h)
+    displayed_w = img_w * scale
+    displayed_h = img_h * scale
+    offset_x = (canvas_w - displayed_w) / 2
+    offset_y = (canvas_h - displayed_h) / 2
+
+    normalized = []
+    for b in boxes:
+        x = (b["x"] - offset_x) / scale
+        y = (b["y"] - offset_y) / scale
+        w = b["w"] / scale
+        h = b["h"] / scale
+
+        # จำกัดไม่ให้กล่องหลุดขอบภาพจริง (เผื่อผู้ใช้วาดชิดขอบ container)
+        x = max(0, min(x, img_w))
+        y = max(0, min(y, img_h))
+        w = max(0, min(w, img_w - x))
+        h = max(0, min(h, img_h - y))
+
+        normalized.append({
+            "label": b["label"],
+            "x": round(x), "y": round(y),
+            "w": round(w), "h": round(h),
+        })
+    return normalized
+
+
+def _rotate_boxes(boxes, clockwise_deg, img_w, img_h):
+    """
+    หมุนกล่องรอบจุดกึ่งกลางภาพตามมุม clockwise_deg (องศา, ค่าบวก = หมุนตามเข็มนาฬิกา
+    เหมือนที่ React preview ใช้ CSS `rotate(Ndeg)`) แล้วคำนวณ axis-aligned bounding box ใหม่
+    จากมุมทั้ง 4 ของกล่องเดิมที่หมุนแล้ว
+    """
+    angle = math.radians(clockwise_deg)
+    cx, cy = img_w / 2, img_h / 2
+    cos_a, sin_a = math.cos(angle), math.sin(angle)
+
+    result = []
+    for b in boxes:
+        corners = [
+            (b["x"], b["y"]),
+            (b["x"] + b["w"], b["y"]),
+            (b["x"], b["y"] + b["h"]),
+            (b["x"] + b["w"], b["y"] + b["h"]),
+        ]
+        rotated = []
+        for px, py in corners:
+            dx, dy = px - cx, py - cy
+            rx = cx + dx * cos_a - dy * sin_a
+            ry = cy + dx * sin_a + dy * cos_a
+            rotated.append((rx, ry))
+
+        xs = [p[0] for p in rotated]
+        ys = [p[1] for p in rotated]
+        nx = max(0, min(xs))
+        ny = max(0, min(ys))
+        nw = min(img_w, max(xs)) - nx
+        nh = min(img_h, max(ys)) - ny
+
+        result.append({
+            "label": b["label"],
+            "x": round(nx), "y": round(ny),
+            "w": round(max(0, nw)), "h": round(max(0, nh)),
+        })
+    return result
+
+
+def _zoom_boxes(boxes, zoom_factor, img_w, img_h):
+    """ขยายกล่องรอบจุดกึ่งกลางภาพตาม zoom_factor เดียวกับที่ใช้ crop+resize ภาพ"""
+    cx, cy = img_w / 2, img_h / 2
+    result = []
+    for b in boxes:
+        x = cx + (b["x"] - cx) * zoom_factor
+        y = cy + (b["y"] - cy) * zoom_factor
+        w = b["w"] * zoom_factor
+        h = b["h"] * zoom_factor
+
+        x = max(0, min(x, img_w))
+        y = max(0, min(y, img_h))
+        w = max(0, min(w, img_w - x))
+        h = max(0, min(h, img_h - y))
+
+        result.append({
+            "label": b["label"],
+            "x": round(x), "y": round(y),
+            "w": round(w), "h": round(h),
+        })
+    return result
+
+
+def _flip_boxes_horizontal(boxes, img_w):
+    """พลิกกล่องแนวนอนตามภาพที่ mirror แล้ว"""
+    result = []
+    for b in boxes:
+        new_x = img_w - (b["x"] + b["w"])
+        result.append({
+            "label": b["label"],
+            "x": round(new_x), "y": round(b["y"]),
+            "w": round(b["w"]), "h": round(b["h"]),
+        })
+    return result
+
+
+def apply_geometric_augmentation(img, aug_mode, boxes):
+    """
+    แปลงภาพจริง (PIL Image) ตาม aug_mode ที่เป็น geometric แล้วคืนกล่องที่คำนวณใหม่ให้ตรงกับภาพ
+    คืนค่า (augmented_img, augmented_boxes)
+    """
+    img_w, img_h = img.size
+
+    if aug_mode == "rotation_-10":
+        # ต้องการหมุนภาพ 10 องศาทวนเข็มนาฬิกา (ตรงกับ CSS rotate(-10deg) ฝั่ง preview)
+        # PIL.rotate() มุมบวก = ทวนเข็มนาฬิกาอยู่แล้ว จึงใส่ 10 ตรงๆ
+        new_img = img.rotate(10, resample=RESAMPLE_BICUBIC, expand=False, fillcolor=(0, 0, 0))
+        new_boxes = _rotate_boxes(boxes, clockwise_deg=-10, img_w=img_w, img_h=img_h)
+        return new_img, new_boxes
+
+    if aug_mode == "rotation_10":
+        # หมุนภาพ 10 องศาตามเข็มนาฬิกา (ตรงกับ CSS rotate(10deg))
+        # PIL.rotate() มุมบวกทวนเข็ม จึงต้องใส่ค่าติดลบ
+        new_img = img.rotate(-10, resample=RESAMPLE_BICUBIC, expand=False, fillcolor=(0, 0, 0))
+        new_boxes = _rotate_boxes(boxes, clockwise_deg=10, img_w=img_w, img_h=img_h)
+        return new_img, new_boxes
+
+    if aug_mode == "zoom_in":
+        zoom = 1.15
+        crop_w, crop_h = int(img_w / zoom), int(img_h / zoom)
+        left = (img_w - crop_w) // 2
+        top = (img_h - crop_h) // 2
+        cropped = img.crop((left, top, left + crop_w, top + crop_h))
+        new_img = cropped.resize((img_w, img_h), RESAMPLE_BICUBIC)
+        new_boxes = _zoom_boxes(boxes, zoom_factor=zoom, img_w=img_w, img_h=img_h)
+        return new_img, new_boxes
+
+    if aug_mode == "flip_horizontal":
+        new_img = ImageOps.mirror(img)
+        new_boxes = _flip_boxes_horizontal(boxes, img_w=img_w)
+        return new_img, new_boxes
+
+    return img, boxes
+
+
+def _cors(resp):
+    resp.headers.add("Access-Control-Allow-Origin", "*")
+    return resp
+
+
 @app.route("/api/upload_dataset", methods=["POST", "OPTIONS"])
 def upload_dataset():
-    # 🌟 ดักจับ Preflight Request จากเบราว์เซอร์ (ฝั่ง React)
     if request.method == "OPTIONS":
         response = jsonify({"success": True})
         response.headers.add("Access-Control-Allow-Origin", "*")
@@ -3242,55 +3446,72 @@ def upload_dataset():
     try:
         data = request.json
         if not data:
-            resp_err = jsonify({"error": "Missing request body"})
-            resp_err.headers.add("Access-Control-Allow-Origin", "*")
-            return resp_err, 400
+            return _cors(jsonify({"error": "Missing request body"})), 400
 
         email = data.get("email")
         project = data.get("project_name")
         class_name = data.get("class_name")
         aug_mode = data.get("aug_mode", "original")
-        image_data = data.get("image_data")  # รับ Base64 สตริง
-        bounding_boxes = data.get("bounding_boxes", [])
-        
-        # 📥 รับขนาดหน้าจอ Canvas ที่ส่งมาจาก React เพิ่มเติม
+        image_data = data.get("image_data")  # Base64 string
+        raw_boxes = data.get("bounding_boxes", [])
         canvas_width = data.get("canvas_width")
         canvas_height = data.get("canvas_height")
 
         if not all([email, project, class_name, image_data]):
-            resp_err = jsonify({"error": "Missing required fields (email, project_name, class_name, image_data)"})
-            resp_err.headers.add("Access-Control-Allow-Origin", "*")
-            return resp_err, 400
+            return _cors(jsonify({
+                "error": "Missing required fields (email, project_name, class_name, image_data)"
+            })), 400
 
         # ---------------------------------------------------------
-        # 1. จัดการแปลง Base64 และบันทึกลง Firebase Storage
-        # Path -> /{email}/{project}/{class}/{filename}.jpg
+        # 1. Decode base64 -> PIL Image (แปลงเป็น RGB เผื่อ PNG มี alpha channel)
         # ---------------------------------------------------------
         if "," in image_data:
-            header, base64_str = image_data.split(",", 1)
+            _, base64_str = image_data.split(",", 1)
         else:
             base64_str = image_data
 
-        # Decode สตริง Base64 กลับมาเป็นไบนารีไฟล์ภาพ
-        image_bytes = base64.b64decode(base64_str)
-        
-        # ตั้งชื่อไฟล์แบบไม่ซ้ำกันด้วย UUID พร้อมบันทึกเวลา (ไม่มีการวางทับรูปเก่า)
+        image_bytes_in = base64.b64decode(base64_str)
+        pil_img = Image.open(io.BytesIO(image_bytes_in)).convert("RGB")
+        img_w, img_h = pil_img.size
+
+        # ---------------------------------------------------------
+        # 2. Normalize พิกัดกล่องจาก container space -> image pixel space
+        #    (แก้ปัญหา letterboxing จาก object-fit: contain)
+        # ---------------------------------------------------------
+        normalized_boxes = normalize_boxes_to_image_space(
+            raw_boxes, canvas_width, canvas_height, img_w, img_h
+        )
+
+        # ---------------------------------------------------------
+        # 3. ถ้าเป็นโหมด geometric ให้แปลงภาพจริง + คำนวณกล่องใหม่ตามภาพ
+        #    ถ้าเป็นโหมด pixel-level ฝั่ง React แปลงภาพมาก่อนส่งแล้ว ข้ามขั้นตอนนี้
+        # ---------------------------------------------------------
+        if aug_mode in GEOMETRIC_MODES:
+            pil_img, final_boxes = apply_geometric_augmentation(pil_img, aug_mode, normalized_boxes)
+        else:
+            final_boxes = normalized_boxes
+
+        # ---------------------------------------------------------
+        # 4. Encode ภาพที่ได้ (ต้นฉบับ หรือแปลงแล้ว) กลับเป็น JPEG bytes
+        # ---------------------------------------------------------
+        out_buffer = io.BytesIO()
+        pil_img.save(out_buffer, format="JPEG", quality=92)
+        image_bytes_out = out_buffer.getvalue()
+
+        # ---------------------------------------------------------
+        # 5. อัปโหลดขึ้น Firebase Storage
+        # ---------------------------------------------------------
         filename = f"{int(time.time())}_{uuid.uuid4().hex[:8]}.jpg"
-        
-        # ประกอบ Path สำหรับเซฟรูปภาพลง Storage
         storage_path = f"{email}/{project}/{class_name}/{filename}"
-        
-        # อัปโหลดขึ้น Firebase Storage
+
         blob = bucket.blob(storage_path)
-        blob.upload_from_string(image_bytes, content_type="image/jpeg")
-        
-        # ทำให้รูปเข้าถึงได้ผ่าน Public URL
+        blob.upload_from_string(image_bytes_out, content_type="image/jpeg")
         blob.make_public()
         image_url = blob.public_url
 
         # ---------------------------------------------------------
-        # 2. บันทึกข้อมูลพิกัดและรายละเอียดอื่นลง Firestore
-        # Path -> /user/{email}/dataset_session/{project}/class/{class}/images/{image_id}
+        # 6. บันทึกข้อมูลลง Firestore (เก็บกล่องที่ normalize + augment แล้ว
+        #    พร้อมขนาดภาพจริง เพื่อให้ตรวจสอบ/แปลงย้อนกลับได้ในอนาคต)
         # ---------------------------------------------------------
         doc_ref = worker_db.collection("user").document(email) \
                            .collection("dataset_session").document(project) \
@@ -3302,29 +3523,28 @@ def upload_dataset():
             "storage_path": storage_path,
             "image_url": image_url,
             "aug_mode": aug_mode,
-            "canvas_width_at_capture": canvas_width,   # บันทึกขนาด Canvas ไว้เช็กสเกลพิกัด
+            "image_width": img_w,
+            "image_height": img_h,
+            "canvas_width_at_capture": canvas_width,
             "canvas_height_at_capture": canvas_height,
-            "bounding_boxes": bounding_boxes,
-            "timestamp": datetime.utcnow()
+            "bounding_boxes": final_boxes,
+            "timestamp": datetime.utcnow(),
         }
 
         doc_ref.set(firestore_payload)
 
-        # 🌟 ส่ง Response พร้อมแนบ Access-Control-Allow-Origin เสมอ
-        resp_success = jsonify({
+        return _cors(jsonify({
             "success": True,
             "message": "Dataset saved successfully",
             "storage_path": storage_path,
-            "image_url": image_url
-        })
-        resp_success.headers.add("Access-Control-Allow-Origin", "*")
-        return resp_success, 200
+            "image_url": image_url,
+            "bounding_boxes": final_boxes,
+        })), 200
 
     except Exception as e:
+        import traceback
         print(traceback.format_exc())
-        resp_err = jsonify({"error": str(e)})
-        resp_err.headers.add("Access-Control-Allow-Origin", "*")
-        return resp_err, 500 
+        return _cors(jsonify({"error": str(e)})), 500
 # =========================================================
 # UPDATE PROJECT TYPE (เพิ่มใหม่เพื่อให้ React เรียกใช้ได้)
 # =========================================================
