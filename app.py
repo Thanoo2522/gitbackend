@@ -3500,9 +3500,10 @@ def upload_dataset():
 
         # ---------------------------------------------------------
         # 5. อัปโหลดขึ้น Firebase Storage
+        #    path: /{email}/Detection/{project}/{filename}
         # ---------------------------------------------------------
         filename = f"{int(time.time())}_{uuid.uuid4().hex[:8]}.jpg"
-        storage_path = f"{email}/{project}/{class_name}/{filename}"
+        storage_path = f"{email}/Detection/{project}/{filename}"
 
         blob = bucket.blob(storage_path)
         blob.upload_from_string(image_bytes_out, content_type="image/jpeg")
@@ -3510,15 +3511,17 @@ def upload_dataset():
         image_url = blob.public_url
 
         # ---------------------------------------------------------
-        # 6. บันทึกข้อมูลลง Firestore (เก็บกล่องที่ normalize + augment แล้ว
-        #    พร้อมขนาดภาพจริง เพื่อให้ตรวจสอบ/แปลงย้อนกลับได้ในอนาคต)
+        # 6. บันทึกข้อมูลลง Firestore
+        #    path: /user/{email}/detection/{project}/images/{doc_id}
         # ---------------------------------------------------------
+        doc_id = filename.split(".")[0]
+
         doc_ref = worker_db.collection("user").document(email) \
-                           .collection("dataset_session").document(project) \
-                           .collection("class").document(class_name) \
-                           .collection("images").document(filename.split(".")[0])
+                           .collection("detection").document(project) \
+                           .collection("images").document(doc_id)
 
         firestore_payload = {
+            "class_name": class_name,
             "image_filename": filename,
             "storage_path": storage_path,
             "image_url": image_url,
@@ -3532,6 +3535,18 @@ def upload_dataset():
         }
 
         doc_ref.set(firestore_payload)
+
+        # ---------------------------------------------------------
+        # 7. อัปเดตสรุปยอดรวมของ project ที่ /user/{email}/detection/{project}
+        #    เพื่อให้ endpoint อื่น (เช่น /get_detection_projects) อ่าน total_images ถูกต้อง
+        # ---------------------------------------------------------
+        project_summary_ref = worker_db.collection("user").document(email) \
+                                        .collection("detection").document(project)
+        project_summary_ref.set({
+            "project": project,
+            "total_images": firestore.Increment(1),
+            "updated_at": firestore.SERVER_TIMESTAMP,
+        }, merge=True)
 
         return _cors(jsonify({
             "success": True,
