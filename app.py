@@ -881,13 +881,14 @@ def create_project():
             # 🚀 สำหรับโหมด "detection" หรือ "segmentation"
             # ✅ แก้ให้ตรงกับ path จริงที่ /api/upload_dataset เขียน:
             #    user/{email}/detection/{project}
-            #    user/{email}/segmentation/{project}
-            # (project_type ต้องเป็น "detection" หรือ "segmentation" เป๊ะๆ
-            #  ให้ตรงกับชื่อ collection ที่ /api/upload_dataset ใช้)
+            #    user/{email}/Segment/{project}
+            # (ใช้ PROJECT_TYPE_CONFIG mapping เดียวกับ /api/upload_dataset
+            #  เพื่อไม่ให้ชื่อ collection เพี้ยนกันระหว่าง 2 endpoint นี้)
             width = body.get("resize_width", 640)
             height = body.get("resize_height", 640)
 
-            collection_name = project_type  # "detection" | "segmentation"
+            type_config = PROJECT_TYPE_CONFIG.get(project_type, PROJECT_TYPE_CONFIG["detection"])
+            collection_name = type_config["collection"]  # "detection" | "Segment"
 
             doc_ref = worker_db.collection("user").document(email) \
                         .collection(collection_name).document(project_name)
@@ -948,157 +949,7 @@ def delete_class():
             "message": str(e)
         })
 #===============================================
-@app.route("/get_classification_projects", methods=["POST", "OPTIONS"])
-def get_classification_projects():
-    if request.method == "OPTIONS":
-        response = jsonify({"success": True})
-        response.headers.add("Access-Control-Allow-Origin", "*")
-        response.headers.add("Access-Control-Allow-Headers", "Content-Type,Authorization")
-        response.headers.add("Access-Control-Allow-Methods", "POST,OPTIONS")
-        return response, 200
 
-    try:
-        body = request.get_json(silent=True) or {}
-        email = body.get("email")
-        if not email:
-            return jsonify({"success": False, "message": "Missing email"}), 400
-
-        projects_list = []
-        class_projects = {}
-
-        # ดึงผ่าน collection_group เพื่อความแม่นยำและทะลุผ่าน Virtual Document
-        class_groups = worker_db.collection_group("class").stream()
-
-        for doc in class_groups:
-            path_str = doc.reference.path
-            # กรองเฉพาะของอีเมลนี้ และต้องไม่อยู่ในกลุ่ม detection/segmentation
-            if f"user/{email}/dataset_session" in path_str and "detection" not in path_str and "segmentation" not in path_str:
-                parts = path_str.split("/")
-                if "dataset_session" in parts:
-                    idx = parts.index("dataset_session")
-                    project_name = parts[idx + 1]
-
-                    cls_data = doc.to_dict()
-                    img_count = cls_data.get("total_images", 0)
-                    r_width = cls_data.get("resize_width", 224)
-                    r_height = cls_data.get("resize_height", 224)
-
-                    if project_name not in class_projects:
-                        class_projects[project_name] = {
-                            "project": project_name,
-                            "project_type": "classification",
-                            "resize_width": r_width,
-                            "resize_height": r_height,
-                            "classes": [],
-                            "total_images": 0
-                        }
-
-                    class_projects[project_name]["classes"].append({
-                        "project": project_name,
-                        "label": doc.id,
-                        "total_images": img_count
-                    })
-                    class_projects[project_name]["total_images"] += img_count
-
-        resp = jsonify({"success": True, "data": list(class_projects.values())})
-        resp.headers.add("Access-Control-Allow-Origin", "*")
-        return resp, 200
-    except Exception as e:
-        return jsonify({"success": False, "error": str(e), "data": []}), 500
-
-
-# ==========================================================
-# 🎯 2. Route สำหรับ Object Detection
-# พาธบันทึก: user/{email}/detection/{project_name}
-# (ตรงกับ collection "detection" ที่ /api/upload_dataset เขียนจริง)
-# ==========================================================
-@app.route("/get_detection_projects", methods=["POST", "OPTIONS"])
-def get_detection_projects():
-    if request.method == "OPTIONS":
-        response = jsonify({"success": True})
-        response.headers.add("Access-Control-Allow-Origin", "*")
-        response.headers.add("Access-Control-Allow-Headers", "Content-Type,Authorization")
-        response.headers.add("Access-Control-Allow-Methods", "POST,OPTIONS")
-        return response, 200
-
-    try:
-        body = request.get_json(silent=True) or {}
-        email = body.get("email")
-        if not email:
-            return jsonify({"success": False, "message": "Missing email"}), 400
-
-        projects_list = []
-
-        # ✅ อ่านตรงจาก user/{email}/detection/{project}
-        detection_docs = (
-            worker_db.collection("user").document(email)
-            .collection("detection").stream()
-        )
-
-        for doc in detection_docs:
-            data = doc.to_dict() or {}
-            projects_list.append({
-                "project": doc.id,
-                "project_type": "detection",
-                "resize_width": data.get("resize_width", 640),
-                "resize_height": data.get("resize_height", 640),
-                "total_images": data.get("total_images", 0),
-                "classes": []
-            })
-
-        resp = jsonify({"success": True, "data": projects_list})
-        resp.headers.add("Access-Control-Allow-Origin", "*")
-        return resp, 200
-    except Exception as e:
-        return jsonify({"success": False, "error": str(e), "data": []}), 500
-
-
-# ==========================================================
-# ⬡ 3. Route สำหรับ Segmentation
-# พาธบันทึก: user/{email}/Segment/{project_name}
-# 🔧 FIX: เดิม query จาก collection "segmentation" (ตัวพิมพ์เล็กทั้งหมด)
-#          แต่ /api/upload_dataset เขียนลง collection "Segment" (ตัว S ใหญ่)
-#          ทำให้ query ไม่เจอ project ใดๆ เลย -> แก้ให้ชื่อ collection ตรงกัน
-# ==========================================================
-@app.route("/get_segmentation_projects", methods=["POST", "OPTIONS"])
-def get_segmentation_projects():
-    if request.method == "OPTIONS":
-        response = jsonify({"success": True})
-        response.headers.add("Access-Control-Allow-Origin", "*")
-        response.headers.add("Access-Control-Allow-Headers", "Content-Type,Authorization")
-        response.headers.add("Access-Control-Allow-Methods", "POST,OPTIONS")
-        return response, 200
-
-    try:
-        body = request.get_json(silent=True) or {}
-        email = body.get("email")
-        if not email:
-            return jsonify({"success": False, "message": "Missing email"}), 400
-
-        projects_list = []
-
-        # ✅ อ่านตรงจาก user/{email}/Segment/{project}  (แก้ชื่อ collection ให้ตรงกับที่บันทึกจริง)
-        segmentation_docs = (
-            worker_db.collection("user").document(email)
-            .collection("Segment").stream()
-        )
-
-        for doc in segmentation_docs:
-            data = doc.to_dict() or {}
-            projects_list.append({
-                "project": doc.id,
-                "project_type": "segmentation",
-                "resize_width": data.get("resize_width", 640),
-                "resize_height": data.get("resize_height", 640),
-                "total_images": data.get("total_images", 0),
-                "classes": []
-            })
-
-        resp = jsonify({"success": True, "data": projects_list})
-        resp.headers.add("Access-Control-Allow-Origin", "*")
-        return resp, 200
-    except Exception as e:
-        return jsonify({"success": False, "error": str(e), "data": []}), 500
 
 @app.route("/train_dataset", methods=["POST"])
 def train_dataset():
@@ -3232,10 +3083,10 @@ except AttributeError:
 
 
 
-# โหมดที่ยังต้องให้ backend แปลงภาพจริง (กระทบตำแหน่งกล่อง จึงต้องคำนวณกล่องใหม่ด้วย)
+# โหมดที่ยังต้องให้ backend แปลงภาพจริง (กระทบตำแหน่ง annotation จึงต้องคำนวณใหม่ด้วย)
 GEOMETRIC_MODES = {"rotation_-10", "rotation_10", "zoom_in", "flip_horizontal"}
 
-# โหมดที่ฝั่ง React แปลงภาพจริงมาก่อนส่งแล้ว (ไม่กระทบตำแหน่งกล่อง)
+# โหมดที่ฝั่ง React แปลงภาพจริงมาก่อนส่งแล้ว (ไม่กระทบตำแหน่ง annotation)
 PIXEL_LEVEL_MODES = {
     "grayscale", "blur",
     "brightness_dark", "brightness_bright",
@@ -3258,6 +3109,9 @@ PROJECT_TYPE_CONFIG = {
 }
 
 
+# ==========================================================
+# 🟧 Bounding Box helpers (Detection)
+# ==========================================================
 def normalize_boxes_to_image_space(boxes, canvas_w, canvas_h, img_w, img_h):
     """
     กล่องที่ React ส่งมาอ้างอิงพิกัดพิกเซลของ container (object-fit: contain)
@@ -3410,6 +3264,85 @@ def apply_geometric_augmentation(img, aug_mode, boxes):
     return img, boxes
 
 
+# ==========================================================
+# ⬡ Polygon helpers (Segmentation)
+# แนวคิดเดียวกับ Bounding Box แต่ทำงานกับ "จุด" แต่ละจุดของ polygon โดยตรง
+# (ไม่ต้องคำนวณ axis-aligned bounding box กลับ เหมือนกรณี Detection)
+# ==========================================================
+def normalize_polygons_to_image_space(polygons, canvas_w, canvas_h, img_w, img_h):
+    """แปลงพิกัดจุดของทุก polygon จาก container space (มี letterbox) -> พิกัดจริงบนภาพ"""
+    if not canvas_w or not canvas_h or canvas_w <= 0 or canvas_h <= 0:
+        return polygons
+
+    scale = min(canvas_w / img_w, canvas_h / img_h)
+    displayed_w = img_w * scale
+    displayed_h = img_h * scale
+    offset_x = (canvas_w - displayed_w) / 2
+    offset_y = (canvas_h - displayed_h) / 2
+
+    normalized = []
+    for poly in polygons:
+        pts = []
+        for p in poly.get("points", []):
+            x = (p["x"] - offset_x) / scale
+            y = (p["y"] - offset_y) / scale
+            x = max(0, min(x, img_w))
+            y = max(0, min(y, img_h))
+            pts.append({"x": round(x), "y": round(y)})
+        normalized.append({"label": poly.get("label", ""), "points": pts})
+    return normalized
+
+
+def _rotate_points(points, clockwise_deg, img_w, img_h):
+    angle = math.radians(clockwise_deg)
+    cx, cy = img_w / 2, img_h / 2
+    cos_a, sin_a = math.cos(angle), math.sin(angle)
+
+    result = []
+    for p in points:
+        dx, dy = p["x"] - cx, p["y"] - cy
+        rx = cx + dx * cos_a - dy * sin_a
+        ry = cy + dx * sin_a + dy * cos_a
+        result.append({
+            "x": round(max(0, min(rx, img_w))),
+            "y": round(max(0, min(ry, img_h))),
+        })
+    return result
+
+
+def _zoom_points(points, zoom_factor, img_w, img_h):
+    cx, cy = img_w / 2, img_h / 2
+    result = []
+    for p in points:
+        x = cx + (p["x"] - cx) * zoom_factor
+        y = cy + (p["y"] - cy) * zoom_factor
+        result.append({
+            "x": round(max(0, min(x, img_w))),
+            "y": round(max(0, min(y, img_h))),
+        })
+    return result
+
+
+def _flip_points_horizontal(points, img_w):
+    return [{"x": round(img_w - p["x"]), "y": round(p["y"])} for p in points]
+
+
+def apply_geometric_augmentation_to_polygons(aug_mode, polygons, img_w, img_h):
+    """
+    ใช้ transform เดียวกับที่ apply_geometric_augmentation ทำกับภาพ แต่ทำกับจุด polygon โดยตรง
+    คืนค่า polygons ใหม่ (list ของ {label, points})
+    """
+    if aug_mode == "rotation_-10":
+        return [{"label": poly["label"], "points": _rotate_points(poly["points"], -10, img_w, img_h)} for poly in polygons]
+    if aug_mode == "rotation_10":
+        return [{"label": poly["label"], "points": _rotate_points(poly["points"], 10, img_w, img_h)} for poly in polygons]
+    if aug_mode == "zoom_in":
+        return [{"label": poly["label"], "points": _zoom_points(poly["points"], 1.15, img_w, img_h)} for poly in polygons]
+    if aug_mode == "flip_horizontal":
+        return [{"label": poly["label"], "points": _flip_points_horizontal(poly["points"], img_w)} for poly in polygons]
+    return polygons
+
+
 def _cors(resp):
     resp.headers.add("Access-Control-Allow-Origin", "*")
     return resp
@@ -3434,21 +3367,29 @@ def upload_dataset():
         class_name = data.get("class_name")
         aug_mode = data.get("aug_mode", "original")
         image_data = data.get("image_data")  # Base64 string
-        raw_boxes = data.get("bounding_boxes", [])
         canvas_width = data.get("canvas_width")
         canvas_height = data.get("canvas_height")
 
         # 🌟 ประเภทงาน: "detection" (default) หรือ "segmentation"
-        # ใช้เลือก Firestore collection + Storage folder ที่จะบันทึกข้อมูลลงไป
+        # ใช้เลือก Firestore collection + Storage folder + รูปแบบ annotation ที่จะประมวลผล
         project_type = (data.get("project_type") or "detection").strip().lower()
         type_config = PROJECT_TYPE_CONFIG.get(project_type, PROJECT_TYPE_CONFIG["detection"])
         collection_name = type_config["collection"]
         storage_folder = type_config["storage_folder"]
+        is_segmentation = project_type == "segmentation"
 
         if not all([email, project, class_name, image_data]):
             return _cors(jsonify({
                 "error": "Missing required fields (email, project_name, class_name, image_data)"
             })), 400
+
+        # ✅ ตรวจสอบข้อมูล annotation ตามประเภทงาน
+        if is_segmentation:
+            raw_polygons = data.get("polygons", [])
+            if not raw_polygons:
+                return _cors(jsonify({"error": "Missing polygons data for segmentation"})), 400
+        else:
+            raw_boxes = data.get("bounding_boxes", [])
 
         # -------------------------------------------------- 
         # 1. Decode base64 -> PIL Image (แปลงเป็น RGB เผื่อ PNG มี alpha channel)
@@ -3463,21 +3404,36 @@ def upload_dataset():
         img_w, img_h = pil_img.size
 
         # ---------------------------------------------------------
-        # 2. Normalize พิกัดกล่องจาก container space -> image pixel space
+        # 2. Normalize พิกัด annotation จาก container space -> image pixel space
         #    (แก้ปัญหา letterboxing จาก object-fit: contain)
         # ---------------------------------------------------------
-        normalized_boxes = normalize_boxes_to_image_space(
-            raw_boxes, canvas_width, canvas_height, img_w, img_h
-        )
+        if is_segmentation:
+            normalized_polygons = normalize_polygons_to_image_space(
+                raw_polygons, canvas_width, canvas_height, img_w, img_h
+            )
+        else:
+            normalized_boxes = normalize_boxes_to_image_space(
+                raw_boxes, canvas_width, canvas_height, img_w, img_h
+            )
 
         # ---------------------------------------------------------
-        # 3. ถ้าเป็นโหมด geometric ให้แปลงภาพจริง + คำนวณกล่องใหม่ตามภาพ
+        # 3. ถ้าเป็นโหมด geometric ให้แปลงภาพจริง + คำนวณ annotation ใหม่ตามภาพ
         #    ถ้าเป็นโหมด pixel-level ฝั่ง React แปลงภาพมาก่อนส่งแล้ว ข้ามขั้นตอนนี้
         # ---------------------------------------------------------
         if aug_mode in GEOMETRIC_MODES:
-            pil_img, final_boxes = apply_geometric_augmentation(pil_img, aug_mode, normalized_boxes)
+            if is_segmentation:
+                # ใช้ apply_geometric_augmentation แปลงตัวภาพเฉยๆ (ไม่สนใจ boxes ที่คืนมา)
+                pil_img, _ = apply_geometric_augmentation(pil_img, aug_mode, [])
+                final_polygons = apply_geometric_augmentation_to_polygons(
+                    aug_mode, normalized_polygons, img_w, img_h
+                )
+            else:
+                pil_img, final_boxes = apply_geometric_augmentation(pil_img, aug_mode, normalized_boxes)
         else:
-            final_boxes = normalized_boxes
+            if is_segmentation:
+                final_polygons = normalized_polygons
+            else:
+                final_boxes = normalized_boxes
 
         # ---------------------------------------------------------
         # 4. Encode ภาพที่ได้ (ต้นฉบับ หรือแปลงแล้ว) กลับเป็น JPEG bytes
@@ -3514,6 +3470,7 @@ def upload_dataset():
         firestore_payload = {
             "class_name": class_name,
             "project_type": project_type,
+            "annotation_type": "polygon" if is_segmentation else "bbox",
             "image_filename": filename,
             "storage_path": storage_path,
             "image_url": image_url,
@@ -3522,9 +3479,13 @@ def upload_dataset():
             "image_height": img_h,
             "canvas_width_at_capture": canvas_width,
             "canvas_height_at_capture": canvas_height,
-            "bounding_boxes": final_boxes,
             "timestamp": datetime.utcnow(),
         }
+
+        if is_segmentation:
+            firestore_payload["polygons"] = final_polygons
+        else:
+            firestore_payload["bounding_boxes"] = final_boxes
 
         doc_ref.set(firestore_payload)
 
@@ -3543,14 +3504,19 @@ def upload_dataset():
             "updated_at": firestore.SERVER_TIMESTAMP,
         }, merge=True)
 
-        return _cors(jsonify({
+        response_payload = {
             "success": True,
             "message": "Dataset saved successfully",
             "project_type": project_type,
             "storage_path": storage_path,
             "image_url": image_url,
-            "bounding_boxes": final_boxes,
-        })), 200
+        }
+        if is_segmentation:
+            response_payload["polygons"] = final_polygons
+        else:
+            response_payload["bounding_boxes"] = final_boxes
+
+        return _cors(jsonify(response_payload)), 200
 
     except Exception as e:
         import traceback
