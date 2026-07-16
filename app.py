@@ -2922,6 +2922,193 @@ def download_model():
     )
 
 # =========================================================
+# EXPORT DATASET (Object Detection / Segmentation)
+# ⚠️ นี่ไม่ใช่ "เทรนโมเดล" จริง — ระบบยังไม่มี training pipeline สำหรับ
+#    Detection/Segmentation (มีแค่ Classification ที่ /train_project ด้านบน)
+#    ปุ่มนี้แค่แปลง annotation (bounding_boxes / polygons) ที่เก็บใน Firestore
+#    ให้เป็นฟอร์แมตมาตรฐานอุตสาหกรรม (YOLO หรือ COCO) พร้อมรูปภาพ แล้ว zip ให้โหลด
+#    ไปเทรนต่อเองด้วยเครื่องมืออื่น (เช่น Ultralytics YOLOv8, Detectron2, Colab)
+#
+# path อ่านข้อมูล (ตรงกับที่ /api/upload_dataset เขียน):
+#   detection    -> user/{email}/detection/{project}/images/{doc_id}
+#   segmentation -> user/{email}/Segment/{project}/images/{doc_id}
+# =========================================================
+def _yolo_normalize_bbox(box, img_w, img_h):
+    x_center = (box["x"] + box["w"] / 2) / img_w
+    y_center = (box["y"] + box["h"] / 2) / img_h
+    return x_center, y_center, box["w"] / img_w, box["h"] / img_h
+
+
+def _yolo_normalize_polygon(points, img_w, img_h):
+    return [(p["x"] / img_w, p["y"] / img_h) for p in points]
+
+
+@app.route("/export_dataset", methods=["POST", "OPTIONS"])
+def export_dataset():
+    if request.method == "OPTIONS":
+        response = jsonify({"success": True})
+        response.headers.add("Access-Control-Allow-Origin", "*")
+        response.headers.add("Access-Control-Allow-Headers", "Content-Type,Authorization")
+        response.headers.add("Access-Control-Allow-Methods", "POST,OPTIONS")
+        return response, 200
+
+    try:
+        data = request.get_json(silent=True) or {}
+        email = data.get("email")
+        project = data.get("project")
+        task_type = (data.get("taskType") or "detection").strip().lower()
+        export_format = (data.get("format") or "yolo").strip().lower()
+
+        if not email or not project:
+            return jsonify({"success": False, "message": "Missing email or project"}), 400
+
+        if export_format not in ("yolo", "coco"):
+            return jsonify({"success": False, "message": "format must be 'yolo' or 'coco'"}), 400
+
+        is_segmentation = task_type == "segmentation"
+        collection_name = "Segment" if is_segmentation else "detection"
+
+        image_docs = list(
+            worker_db.collection("user").document(email)
+            .collection(collection_name).document(project)
+            .collection("images").stream()
+        )
+
+        if not image_docs:
+            return jsonify({
+                "success": False,
+                "message": "ไม่พบรูปภาพในโปรเจกต์นี้ กรุณาบันทึกรูปภาพอย่างน้อย 1 รูปก่อน Export"
+            }), 404
+
+        # เก็บรายชื่อ class ทั้งหมด (อิง label ของแต่ละกล่อง/polygon จริง ไม่ใช่แค่ class_name ของภาพ)
+        class_names = []
+
+        def get_class_id(name):
+            if name not in class_names:
+                class_names.append(name)
+            return class_names.index(name)
+
+        zip_buffer = io.BytesIO()
+        with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+
+            coco_images = []
+            coco_annotations = []
+            ann_id = 1
+
+            for idx, doc in enumerate(image_docs):
+                d = doc.to_dict() or {}
+                storage_path = d.get("storage_path")
+                img_w = d.get("image_width")
+                img_h = d.get("image_height")
+                filename = d.get("image_filename") or f"{doc.id}.jpg"
+
+                if not storage_path or not img_w or not img_h:
+                    continue  # ข้ามเอกสารที่ข้อมูลไม่ครบ (กันพัง ไม่ให้ export ทั้งชุดล้มเพราะรูปเดียว)
+
+                try:
+                    img_bytes = bucket.blob(storage_path).download_as_bytes()
+                except Exception:
+                    continue  # ไฟล์รูปหายจาก Storage ก็ข้ามไป ไม่ให้ทั้ง export ล้ม
+
+                zf.writestr(f"images/{filename}", img_bytes)
+
+                if export_format == "yolo":
+                    lines = []
+                    if is_segmentation:
+                        for poly in d.get("polygons", []):
+                            cid = get_class_id(poly.get("label", "object"))
+                            norm_pts = _yolo_normalize_polygon(poly.get("points", []), img_w, img_h)
+                            coords = " ".join(f"{x:.6f} {y:.6f}" for x, y in norm_pts)
+                            lines.append(f"{cid} {coords}")
+                    else:
+                        for box in d.get("bounding_boxes", []):
+                            cid = get_class_id(box.get("label", "object"))
+                            xc, yc, wn, hn = _yolo_normalize_bbox(box, img_w, img_h)
+                            lines.append(f"{cid} {xc:.6f} {yc:.6f} {wn:.6f} {hn:.6f}")
+
+                    label_filename = os.path.splitext(filename)[0] + ".txt"
+                    zf.writestr(f"labels/{label_filename}", "\n".join(lines))
+
+                else:  # coco
+                    image_id = idx + 1
+                    coco_images.append({
+                        "id": image_id,
+                        "file_name": f"images/{filename}",
+                        "width": img_w,
+                        "height": img_h
+                    })
+
+                    if is_segmentation:
+                        for poly in d.get("polygons", []):
+                            cid = get_class_id(poly.get("label", "object"))
+                            pts = poly.get("points", [])
+                            if not pts:
+                                continue
+                            xs = [p["x"] for p in pts]
+                            ys = [p["y"] for p in pts]
+                            seg_flat = []
+                            for p in pts:
+                                seg_flat.extend([p["x"], p["y"]])
+                            bbox = [min(xs), min(ys), max(xs) - min(xs), max(ys) - min(ys)]
+                            coco_annotations.append({
+                                "id": ann_id,
+                                "image_id": image_id,
+                                "category_id": cid + 1,
+                                "segmentation": [seg_flat],
+                                "bbox": bbox,
+                                "area": bbox[2] * bbox[3],
+                                "iscrowd": 0
+                            })
+                            ann_id += 1
+                    else:
+                        for box in d.get("bounding_boxes", []):
+                            cid = get_class_id(box.get("label", "object"))
+                            coco_annotations.append({
+                                "id": ann_id,
+                                "image_id": image_id,
+                                "category_id": cid + 1,
+                                "bbox": [box["x"], box["y"], box["w"], box["h"]],
+                                "area": box["w"] * box["h"],
+                                "iscrowd": 0
+                            })
+                            ann_id += 1
+
+            if export_format == "yolo":
+                zf.writestr("classes.txt", "\n".join(class_names))
+                data_yaml = (
+                    "path: .\n"
+                    "train: images\n"
+                    "val: images\n"
+                    f"nc: {len(class_names)}\n"
+                    f"names: {class_names}\n"
+                )
+                zf.writestr("data.yaml", data_yaml)
+            else:
+                coco_json = {
+                    "images": coco_images,
+                    "annotations": coco_annotations,
+                    "categories": [
+                        {"id": i + 1, "name": name} for i, name in enumerate(class_names)
+                    ]
+                }
+                zf.writestr("annotations.json", json.dumps(coco_json, ensure_ascii=False, indent=2))
+
+        zip_buffer.seek(0)
+
+        resp = send_file(
+            zip_buffer,
+            mimetype="application/zip",
+            as_attachment=True,
+            download_name=f"{project}_{task_type}_{export_format}.zip"
+        )
+        resp.headers.add("Access-Control-Allow-Origin", "*")
+        return resp
+
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"success": False, "message": str(e)}), 500
+
+# =========================================================
 # DELETE PROJECT
 # ลบทั้งโปรเจกต์:
 #   1) Storage   : ลบไฟล์ทุกไฟล์ใต้ path  {email}/{project}/...
