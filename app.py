@@ -3224,32 +3224,12 @@ def delete_image():
             "message": str(e)
         }), 500  
 #===================keep dataset =====================================     
-"""
-อัปเดต /api/upload_dataset ให้รองรับ DetectionCapture.jsx อย่างสมบูรณ์
-
-ต้องติดตั้งเพิ่ม: pip install Pillow --break-system-packages
-
-การเปลี่ยนแปลงหลัก 2 จุด:
-1. normalize_boxes_to_image_space() — แปลงพิกัดกล่องจากพื้นที่ container
-   (canvas_width/canvas_height ที่มี letterboxing จาก object-fit: contain)
-   ให้เป็นพิกัดจริงบนภาพ (image.width/image.height)
-2. apply_geometric_augmentation() + คำนวณกล่องใหม่ตามภาพที่ถูกแปลง
-   — เฉพาะโหมด geometric (rotate/zoom/flip) เท่านั้น
-   ส่วนโหมด pixel-level (grayscale/blur/brightness/contrast/saturation)
-   ฝั่ง React แปลงภาพจริงมาก่อนส่งแล้ว (ดู applyPixelAugmentation ใน DetectionCapture.jsx)
-   ที่นี่แค่ normalize พิกัดกล่องอย่างเดียว ไม่ต้องแปลงภาพซ้ำ
-"""
-
-
-
-# Pillow 10+ ลบค่าคงที่ระดับบน (Image.BICUBIC) ออกแล้ว ต้องใช้ Image.Resampling.BICUBIC แทน
-# บล็อกนี้รองรับได้ทั้ง Pillow เวอร์ชันเก่าและใหม่
 try:
     RESAMPLE_BICUBIC = Image.Resampling.BICUBIC
 except AttributeError:
     RESAMPLE_BICUBIC = getattr(Image, "BICUBIC")
 
-    
+
 
 # โหมดที่ยังต้องให้ backend แปลงภาพจริง (กระทบตำแหน่งกล่อง จึงต้องคำนวณกล่องใหม่ด้วย)
 GEOMETRIC_MODES = {"rotation_-10", "rotation_10", "zoom_in", "flip_horizontal"}
@@ -3260,6 +3240,20 @@ PIXEL_LEVEL_MODES = {
     "brightness_dark", "brightness_bright",
     "contrast_low", "contrast_high",
     "saturation_low", "saturation_high",
+}
+
+# 🌟 ประเภทงานที่รองรับ -> ใช้เลือกทั้งชื่อ collection ใน Firestore และโฟลเดอร์ใน Storage
+# "detection"    -> /user/{email}/detection/{project}/images/{doc_id}   , storage: {email}/Detection/{project}/...
+# "segmentation" -> /user/{email}/Segment/{project}/images/{doc_id}    , storage: {email}/Segment/{project}/...
+PROJECT_TYPE_CONFIG = {
+    "detection": {
+        "collection": "detection",
+        "storage_folder": "Detection",
+    },
+    "segmentation": {
+        "collection": "Segment",
+        "storage_folder": "Segment",
+    },
 }
 
 
@@ -3443,6 +3437,13 @@ def upload_dataset():
         canvas_width = data.get("canvas_width")
         canvas_height = data.get("canvas_height")
 
+        # 🌟 ประเภทงาน: "detection" (default) หรือ "segmentation"
+        # ใช้เลือก Firestore collection + Storage folder ที่จะบันทึกข้อมูลลงไป
+        project_type = (data.get("project_type") or "detection").strip().lower()
+        type_config = PROJECT_TYPE_CONFIG.get(project_type, PROJECT_TYPE_CONFIG["detection"])
+        collection_name = type_config["collection"]
+        storage_folder = type_config["storage_folder"]
+
         if not all([email, project, class_name, image_data]):
             return _cors(jsonify({
                 "error": "Missing required fields (email, project_name, class_name, image_data)"
@@ -3486,10 +3487,12 @@ def upload_dataset():
 
         # ---------------------------------------------------------
         # 5. อัปโหลดขึ้น Firebase Storage
-        #    path: /{email}/Detection/{project}/{filename}
+        #    path: /{email}/{storage_folder}/{project}/{filename}
+        #    - detection    -> {email}/Detection/{project}/...
+        #    - segmentation -> {email}/Segment/{project}/...
         # ---------------------------------------------------------
         filename = f"{int(time.time())}_{uuid.uuid4().hex[:8]}.jpg"
-        storage_path = f"{email}/Detection/{project}/{filename}"
+        storage_path = f"{email}/{storage_folder}/{project}/{filename}"
 
         blob = bucket.blob(storage_path)
         blob.upload_from_string(image_bytes_out, content_type="image/jpeg")
@@ -3498,16 +3501,18 @@ def upload_dataset():
 
         # ---------------------------------------------------------
         # 6. บันทึกข้อมูลลง Firestore
-        #    path: /user/{email}/detection/{project}/images/{doc_id}
+        #    - detection    -> /user/{email}/detection/{project}/images/{doc_id}
+        #    - segmentation -> /user/{email}/Segment/{project}/images/{doc_id}
         # ---------------------------------------------------------
         doc_id = filename.split(".")[0]
 
         doc_ref = worker_db.collection("user").document(email) \
-                           .collection("detection").document(project) \
+                           .collection(collection_name).document(project) \
                            .collection("images").document(doc_id)
 
         firestore_payload = {
             "class_name": class_name,
+            "project_type": project_type,
             "image_filename": filename,
             "storage_path": storage_path,
             "image_url": image_url,
@@ -3523,11 +3528,14 @@ def upload_dataset():
         doc_ref.set(firestore_payload)
 
         # ---------------------------------------------------------
-        # 7. อัปเดตสรุปยอดรวมของ project ที่ /user/{email}/detection/{project}
-        #    เพื่อให้ endpoint อื่น (เช่น /get_detection_projects) อ่าน total_images ถูกต้อง
+        # 7. อัปเดตสรุปยอดรวมของ project
+        #    - detection    -> /user/{email}/detection/{project}
+        #    - segmentation -> /user/{email}/Segment/{project}
+        #    เพื่อให้ endpoint อื่น (เช่น /get_detection_projects, /get_segmentation_projects)
+        #    อ่าน total_images ถูกต้อง
         # ---------------------------------------------------------
         project_summary_ref = worker_db.collection("user").document(email) \
-                                        .collection("detection").document(project)
+                                        .collection(collection_name).document(project)
         project_summary_ref.set({
             "project": project,
             "total_images": firestore.Increment(1),
@@ -3537,6 +3545,7 @@ def upload_dataset():
         return _cors(jsonify({
             "success": True,
             "message": "Dataset saved successfully",
+            "project_type": project_type,
             "storage_path": storage_path,
             "image_url": image_url,
             "bounding_boxes": final_boxes,
