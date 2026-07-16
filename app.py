@@ -42,6 +42,7 @@ import io
  
  
 import tempfile
+import shutil
 import threading
 import traceback
 
@@ -3108,6 +3109,265 @@ def export_dataset():
         traceback.print_exc()
         return jsonify({"success": False, "message": str(e)}), 500
 
+
+# =========================================================
+# 🚀 TRAIN DETECTION / SEGMENTATION (YOLOv8 จริง ผ่าน Ultralytics)
+# ⚠️ ต้อง `pip install ultralytics` เพิ่มใน requirements.txt ก่อน deploy
+#    และเปิด "CPU is always allocated" บน Cloud Run service นี้
+#    ไม่งั้น background thread จะหยุดทำงานหลัง response ถูกส่งกลับไปแล้ว
+#
+# รองรับเฉพาะฟอร์แมต YOLO เท่านั้น (COCO ยังคง export-only ผ่าน /export_dataset
+# เพราะ COCO ไม่ได้ผูกกับ trainer ตัวไหนตัวหนึ่งโดยเฉพาะ ต่างจาก YOLO ที่
+# ultralytics ใช้ฟอร์แมตนี้ตรงๆ ได้เลย)
+# =========================================================
+det_seg_training_status = {}   # key = f"{email}/{project}/{taskType}"
+
+
+def _build_yolo_dataset_on_disk(email, project, task_type, base_dir, val_ratio=0.2):
+    """
+    ดาวน์โหลดรูป + แปลง annotation เป็น YOLO format วางไว้ที่ base_dir ตามโครงสร้าง
+    ที่ ultralytics ต้องการ:
+      base_dir/images/train, base_dir/images/val
+      base_dir/labels/train, base_dir/labels/val
+    คืนค่า (class_names, total_images)
+    """
+    is_segmentation = task_type == "segmentation"
+    collection_name = "Segment" if is_segmentation else "detection"
+
+    image_docs = list(
+        worker_db.collection("user").document(email)
+        .collection(collection_name).document(project)
+        .collection("images").stream()
+    )
+
+    if not image_docs:
+        raise ValueError("ไม่พบรูปภาพในโปรเจกต์นี้ กรุณาบันทึกรูปภาพอย่างน้อย 1 รูปก่อนเทรน")
+
+    class_names = []
+
+    def get_class_id(name):
+        if name not in class_names:
+            class_names.append(name)
+        return class_names.index(name)
+
+    for sub in ("images/train", "images/val", "labels/train", "labels/val"):
+        os.makedirs(os.path.join(base_dir, sub), exist_ok=True)
+
+    n_docs = len(image_docs)
+    total = 0
+
+    for idx, doc in enumerate(image_docs):
+        d = doc.to_dict() or {}
+        storage_path = d.get("storage_path")
+        img_w = d.get("image_width")
+        img_h = d.get("image_height")
+        filename = d.get("image_filename") or f"{doc.id}.jpg"
+
+        if not storage_path or not img_w or not img_h:
+            continue
+
+        try:
+            img_bytes = bucket.blob(storage_path).download_as_bytes()
+        except Exception:
+            continue
+
+        # แบ่ง train/val ง่ายๆ ตาม val_ratio ถ้าข้อมูลน้อยเกินไป (<5 ภาพ) ให้ไป train หมด
+        split = "val" if (n_docs >= 5 and idx % max(2, int(1 / val_ratio)) == 0) else "train"
+
+        with open(os.path.join(base_dir, "images", split, filename), "wb") as f:
+            f.write(img_bytes)
+
+        lines = []
+        if is_segmentation:
+            for poly in d.get("polygons", []):
+                cid = get_class_id(poly.get("label", "object"))
+                norm_pts = _yolo_normalize_polygon(poly.get("points", []), img_w, img_h)
+                coords = " ".join(f"{x:.6f} {y:.6f}" for x, y in norm_pts)
+                lines.append(f"{cid} {coords}")
+        else:
+            for box in d.get("bounding_boxes", []):
+                cid = get_class_id(box.get("label", "object"))
+                xc, yc, wn, hn = _yolo_normalize_bbox(box, img_w, img_h)
+                lines.append(f"{cid} {xc:.6f} {yc:.6f} {wn:.6f} {hn:.6f}")
+
+        label_filename = os.path.splitext(filename)[0] + ".txt"
+        with open(os.path.join(base_dir, "labels", split, label_filename), "w") as f:
+            f.write("\n".join(lines))
+
+        total += 1
+
+    # กันเคส val ว่างเปล่า (ข้อมูลน้อยมาก) -> copy 1 ภาพจาก train มาเป็น val แทน
+    # (ultralytics ต้องการ val set เสมอ ต่อให้จะ evaluate ซ้ำกับ train ก็ตาม)
+    val_dir = os.path.join(base_dir, "images", "val")
+    if not os.listdir(val_dir):
+        train_dir = os.path.join(base_dir, "images", "train")
+        train_images = os.listdir(train_dir)
+        if train_images:
+            sample = train_images[0]
+            shutil.copy(os.path.join(train_dir, sample), os.path.join(val_dir, sample))
+            label_sample = os.path.splitext(sample)[0] + ".txt"
+            shutil.copy(
+                os.path.join(base_dir, "labels", "train", label_sample),
+                os.path.join(base_dir, "labels", "val", label_sample)
+            )
+
+    if total == 0:
+        raise ValueError("ไม่มีรูปภาพที่ข้อมูลครบสมบูรณ์พอจะใช้เทรนได้")
+
+    return class_names, total
+
+
+def run_det_seg_training(email, project, task_type):
+    key = f"{email}/{project}/{task_type}"
+    tmp_dir = tempfile.mkdtemp(prefix="yolo_train_")
+
+    try:
+        # import ตรงนี้ (ไม่ import ไว้บนสุดของไฟล์) เพื่อไม่ให้กระทบ startup time
+        # ของ service ถ้าไม่มีใครใช้ฟีเจอร์นี้เลย
+        from ultralytics import YOLO
+
+        class_names, total_images = _build_yolo_dataset_on_disk(email, project, task_type, tmp_dir)
+
+        data_yaml_path = os.path.join(tmp_dir, "data.yaml")
+        with open(data_yaml_path, "w") as f:
+            f.write(
+                f"path: {tmp_dir}\n"
+                f"train: images/train\n"
+                f"val: images/val\n"
+                f"nc: {len(class_names)}\n"
+                f"names: {class_names}\n"
+            )
+
+        det_seg_training_status[key]["progress"] = 10
+        det_seg_training_status[key]["total_images"] = total_images
+
+        base_weights = "yolov8n-seg.pt" if task_type == "segmentation" else "yolov8n.pt"
+        model = YOLO(base_weights)
+
+        EPOCHS = 30  # โมเดล nano + epoch น้อย เพื่อให้พอไหวบน CPU (Cloud Run ไม่มี GPU)
+
+        def on_epoch_end(trainer):
+            epoch = trainer.epoch + 1
+            pct = 10 + int((epoch / EPOCHS) * 85)
+            det_seg_training_status[key]["progress"] = min(pct, 95)
+
+        model.add_callback("on_train_epoch_end", on_epoch_end)
+
+        model.train(
+            data=data_yaml_path,
+            epochs=EPOCHS,
+            imgsz=640,
+            project=tmp_dir,
+            name="run",
+            verbose=False
+        )
+
+        best_path = os.path.join(tmp_dir, "run", "weights", "best.pt")
+        if not os.path.exists(best_path):
+            raise RuntimeError("ไม่พบไฟล์ best.pt หลังเทรนเสร็จ")
+
+        model_storage_path = f"{email}/{project}/model_det_seg/{task_type}/best.pt"
+        bucket.blob(model_storage_path).upload_from_filename(best_path)
+
+        labels_path = f"{email}/{project}/model_det_seg/{task_type}/classes.json"
+        bucket.blob(labels_path).upload_from_string(
+            json.dumps(class_names), content_type="application/json"
+        )
+
+        det_seg_training_status[key] = {
+            "status": "done",
+            "progress": 100,
+            "classes": class_names,
+            "total_images": total_images
+        }
+
+    except Exception as e:
+        traceback.print_exc()
+        det_seg_training_status[key] = {"status": "error", "message": str(e)}
+
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+@app.route("/train_det_seg", methods=["POST", "OPTIONS"])
+def train_det_seg():
+    if request.method == "OPTIONS":
+        response = jsonify({"success": True})
+        response.headers.add("Access-Control-Allow-Origin", "*")
+        response.headers.add("Access-Control-Allow-Headers", "Content-Type,Authorization")
+        response.headers.add("Access-Control-Allow-Methods", "POST,OPTIONS")
+        return response, 200
+
+    data = request.get_json(silent=True) or {}
+    email = data.get("email")
+    project = data.get("project")
+    task_type = (data.get("taskType") or "detection").strip().lower()
+    export_format = (data.get("format") or "yolo").strip().lower()
+
+    if not email or not project:
+        return jsonify({"success": False, "message": "Missing email or project"}), 400
+
+    if export_format != "yolo":
+        return jsonify({
+            "success": False,
+            "message": "รองรับการเทรนจริงเฉพาะฟอร์แมต YOLO เท่านั้น "
+                       "(เลือก COCO เพื่อ Export แล้วนำไปเทรนเองภายนอกแทน)"
+        }), 400
+
+    key = f"{email}/{project}/{task_type}"
+    det_seg_training_status[key] = {"status": "running", "progress": 0}
+
+    thread = threading.Thread(target=run_det_seg_training, args=(email, project, task_type))
+    thread.start()
+
+    resp = jsonify({"success": True, "message": "Training started"})
+    resp.headers.add("Access-Control-Allow-Origin", "*")
+    return resp
+
+
+@app.route("/train_det_seg_status", methods=["POST"])
+def train_det_seg_status():
+    data = request.get_json(silent=True) or {}
+    task_type = (data.get("taskType") or "detection").strip().lower()
+    key = f"{data.get('email')}/{data.get('project')}/{task_type}"
+    resp = jsonify(det_seg_training_status.get(key, {"status": "idle"}))
+    resp.headers.add("Access-Control-Allow-Origin", "*")
+    return resp
+
+
+@app.route("/download_det_seg_model", methods=["POST"])
+def download_det_seg_model():
+    data = request.get_json(silent=True) or {}
+    email = data.get("email")
+    project = data.get("project")
+    task_type = (data.get("taskType") or "detection").strip().lower()
+
+    if not email or not project:
+        return jsonify({"success": False, "message": "Invalid request"}), 400
+
+    model_path = f"{email}/{project}/model_det_seg/{task_type}/best.pt"
+    labels_path = f"{email}/{project}/model_det_seg/{task_type}/classes.json"
+
+    model_blob = bucket.blob(model_path)
+    if not model_blob.exists():
+        return jsonify({"success": False, "message": "Model not found, กรุณา train ก่อน"}), 404
+
+    zip_buffer = io.BytesIO()
+    with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("best.pt", model_blob.download_as_bytes())
+        labels_blob = bucket.blob(labels_path)
+        if labels_blob.exists():
+            zf.writestr("classes.json", labels_blob.download_as_bytes())
+
+    zip_buffer.seek(0)
+    return send_file(
+        zip_buffer,
+        mimetype="application/zip",
+        as_attachment=True,
+        download_name=f"{project}_{task_type}_yolov8_model.zip"
+    )
+
+
 # =========================================================
 # DELETE PROJECT
 # ลบทั้งโปรเจกต์:
@@ -3928,7 +4188,7 @@ def update_project_type():
         }), 500 
 # =========================================================
 # RUN
-# ================================================= 
+# ======================================================
 if __name__ == "__main__":
 
     app.run(
