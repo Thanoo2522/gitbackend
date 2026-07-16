@@ -948,10 +948,6 @@ def delete_class():
             "message": str(e)
         })
 #===============================================
-# ==========================================================
-# 🖼️ 1. Route สำหรับ Classification
-# พาธบันทึก: user/{email}/dataset_session/{project_name}/class/{class_name}
-# ==========================================================
 @app.route("/get_classification_projects", methods=["POST", "OPTIONS"])
 def get_classification_projects():
     if request.method == "OPTIONS":
@@ -981,7 +977,7 @@ def get_classification_projects():
                 if "dataset_session" in parts:
                     idx = parts.index("dataset_session")
                     project_name = parts[idx + 1]
-                    
+
                     cls_data = doc.to_dict()
                     img_count = cls_data.get("total_images", 0)
                     r_width = cls_data.get("resize_width", 224)
@@ -996,7 +992,7 @@ def get_classification_projects():
                             "classes": [],
                             "total_images": 0
                         }
-                    
+
                     class_projects[project_name]["classes"].append({
                         "project": project_name,
                         "label": doc.id,
@@ -1011,9 +1007,10 @@ def get_classification_projects():
         return jsonify({"success": False, "error": str(e), "data": []}), 500
 
 
- # ==========================================================
+# ==========================================================
 # 🎯 2. Route สำหรับ Object Detection
 # พาธบันทึก: user/{email}/detection/{project_name}
+# (ตรงกับ collection "detection" ที่ /api/upload_dataset เขียนจริง)
 # ==========================================================
 @app.route("/get_detection_projects", methods=["POST", "OPTIONS"])
 def get_detection_projects():
@@ -1032,8 +1029,7 @@ def get_detection_projects():
 
         projects_list = []
 
-        # ✅ อ่านตรงจาก user/{email}/detection/{project} (ตรงกับที่ create_project
-        #    และ /api/upload_dataset เขียนจริง)
+        # ✅ อ่านตรงจาก user/{email}/detection/{project}
         detection_docs = (
             worker_db.collection("user").document(email)
             .collection("detection").stream()
@@ -1055,9 +1051,14 @@ def get_detection_projects():
         return resp, 200
     except Exception as e:
         return jsonify({"success": False, "error": str(e), "data": []}), 500
+
+
 # ==========================================================
 # ⬡ 3. Route สำหรับ Segmentation
-# พาธบันทึก: user/{email}/segmentation/{project_name}
+# พาธบันทึก: user/{email}/Segment/{project_name}
+# 🔧 FIX: เดิม query จาก collection "segmentation" (ตัวพิมพ์เล็กทั้งหมด)
+#          แต่ /api/upload_dataset เขียนลง collection "Segment" (ตัว S ใหญ่)
+#          ทำให้ query ไม่เจอ project ใดๆ เลย -> แก้ให้ชื่อ collection ตรงกัน
 # ==========================================================
 @app.route("/get_segmentation_projects", methods=["POST", "OPTIONS"])
 def get_segmentation_projects():
@@ -1076,10 +1077,10 @@ def get_segmentation_projects():
 
         projects_list = []
 
-        # ✅ อ่านตรงจาก user/{email}/segmentation/{project}
+        # ✅ อ่านตรงจาก user/{email}/Segment/{project}  (แก้ชื่อ collection ให้ตรงกับที่บันทึกจริง)
         segmentation_docs = (
             worker_db.collection("user").document(email)
-            .collection("segmentation").stream()
+            .collection("Segment").stream()
         )
 
         for doc in segmentation_docs:
