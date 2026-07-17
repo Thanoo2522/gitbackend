@@ -3367,7 +3367,197 @@ def download_det_seg_model():
         download_name=f"{project}_{task_type}_yolov8_model.zip"
     )
 
+# =========================================================
+# 🌐 EXPORT FOR EDGE (ONNX / TFLite / NCNN)
+# ต่อยอดจาก best.pt ที่ train เสร็จแล้ว (model_det_seg/{task_type}/best.pt)
+# ใช้ ultralytics YOLO(...).export(format=...) ซึ่งกิน CPU/เวลาพอสมควร
+# จึงรันเป็น background thread + poll status เหมือน train_det_seg เดิม
+# =========================================================
 
+edge_export_status = {}   # key = f"{email}/{project}/{task_type}/{edge_format}"
+
+VALID_EDGE_FORMATS = ("onnx", "tflite", "ncnn")
+
+# format string ที่ ultralytics .export() ต้องการ ต่างจากชื่อที่โชว์ผู้ใช้เล็กน้อย
+EDGE_FORMAT_MAP = {
+    "onnx": "onnx",
+    "tflite": "tflite",
+    "ncnn": "ncnn",
+}
+
+# นามสกุลไฟล์ผลลัพธ์หลักที่ ultralytics สร้างให้ต่อ format
+# (tflite และ ncnn จริงๆ ได้ "โฟลเดอร์" ออกมา ไม่ใช่ไฟล์เดี่ยว จึงต้อง zip ทั้งโฟลเดอร์)
+EDGE_FORMAT_IS_DIR = {
+    "onnx": False,
+    "tflite": True,   # ultralytics สร้างเป็นโฟลเดอร์ {name}_saved_model/ พร้อม .tflite ข้างใน
+    "ncnn": True,      # ultralytics สร้างเป็นโฟลเดอร์ {name}_ncnn_model/
+}
+
+
+def run_edge_export(email, project, task_type, edge_format):
+    key = f"{email}/{project}/{task_type}/{edge_format}"
+    tmp_dir = tempfile.mkdtemp(prefix="edge_export_")
+
+    try:
+        from ultralytics import YOLO
+
+        edge_export_status[key]["progress"] = 10
+
+        # ----------------------------------------------------
+        # 1) ดาวน์โหลด best.pt จาก Storage มาไว้ที่ tmp_dir ก่อน
+        # ----------------------------------------------------
+        model_storage_path = f"{email}/{project}/model_det_seg/{task_type}/best.pt"
+        model_blob = bucket.blob(model_storage_path)
+
+        if not model_blob.exists():
+            raise ValueError("ไม่พบ best.pt กรุณา train โมเดลให้เสร็จก่อน")
+
+        local_pt_path = os.path.join(tmp_dir, "best.pt")
+        model_blob.download_to_filename(local_pt_path)
+
+        edge_export_status[key]["progress"] = 30
+
+        # ----------------------------------------------------
+        # 2) โหลดโมเดลแล้วสั่ง export ตาม format ที่เลือก
+        #    imgsz=640 ให้ตรงกับตอน train (yolov8n/-seg เทรนที่ 640)
+        # ----------------------------------------------------
+        model = YOLO(local_pt_path)
+
+        export_kwargs = {"format": EDGE_FORMAT_MAP[edge_format], "imgsz": 640}
+
+        # tflite: ไม่ใส่ int8=True เพราะต้องใช้ calibration dataset เพิ่ม
+        # (ทำ float32 ก่อนเพื่อความง่าย/เสถียร ค่อยเพิ่ม int8 เป็น option ทีหลังได้)
+
+        exported_path = model.export(**export_kwargs)
+        # exported_path คือ path (str) ของไฟล์หรือโฟลเดอร์หลักที่ export ออกมา
+        # อยู่ข้างๆ best.pt ใน tmp_dir เดียวกัน
+
+        edge_export_status[key]["progress"] = 80
+
+        # ----------------------------------------------------
+        # 3) Zip ผลลัพธ์ทั้งหมด (ไฟล์เดี่ยวหรือทั้งโฟลเดอร์) แล้วอัปโหลดขึ้น Storage
+        # ----------------------------------------------------
+        zip_local_path = os.path.join(tmp_dir, f"edge_{edge_format}.zip")
+
+        with zipfile.ZipFile(zip_local_path, "w", zipfile.ZIP_DEFLATED) as zf:
+            if EDGE_FORMAT_IS_DIR.get(edge_format) and os.path.isdir(exported_path):
+                for root, _, files in os.walk(exported_path):
+                    for fname in files:
+                        local_file = os.path.join(root, fname)
+                        arcname = os.path.relpath(local_file, tmp_dir)
+                        zf.write(local_file, arcname)
+            else:
+                zf.write(exported_path, os.path.basename(exported_path))
+
+            # แนบ classes.json เดิมไปด้วย เพราะฝั่ง edge ต้องใช้ mapping class เดียวกัน
+            labels_path = f"{email}/{project}/model_det_seg/{task_type}/classes.json"
+            labels_blob = bucket.blob(labels_path)
+            if labels_blob.exists():
+                zf.writestr("classes.json", labels_blob.download_as_bytes())
+
+        edge_storage_path = f"{email}/{project}/model_edge/{task_type}/{edge_format}.zip"
+        bucket.blob(edge_storage_path).upload_from_filename(zip_local_path)
+
+        edge_export_status[key] = {
+            "status": "done",
+            "progress": 100,
+            "format": edge_format
+        }
+
+    except Exception as e:
+        traceback.print_exc()
+        edge_export_status[key] = {"status": "error", "message": str(e)}
+
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+@app.route("/export_edge_format", methods=["POST", "OPTIONS"])
+def export_edge_format():
+    if request.method == "OPTIONS":
+        response = jsonify({"success": True})
+        response.headers.add("Access-Control-Allow-Origin", "*")
+        response.headers.add("Access-Control-Allow-Headers", "Content-Type,Authorization")
+        response.headers.add("Access-Control-Allow-Methods", "POST,OPTIONS")
+        return response, 200
+
+    data = request.get_json(silent=True) or {}
+    email = data.get("email")
+    project = data.get("project")
+    task_type = (data.get("taskType") or "detection").strip().lower()
+    edge_format = (data.get("edgeFormat") or "onnx").strip().lower()
+
+    if not email or not project:
+        return jsonify({"success": False, "message": "Missing email or project"}), 400
+
+    if edge_format not in VALID_EDGE_FORMATS:
+        return jsonify({
+            "success": False,
+            "message": f"edgeFormat must be one of {VALID_EDGE_FORMATS}"
+        }), 400
+
+    # เช็คว่ามี best.pt อยู่จริงก่อนเริ่ม thread (ตอบ error ทันที ไม่ต้องรอ poll)
+    model_storage_path = f"{email}/{project}/model_det_seg/{task_type}/best.pt"
+    if not bucket.blob(model_storage_path).exists():
+        return jsonify({
+            "success": False,
+            "message": "ไม่พบโมเดลที่ train แล้ว กรุณา train ให้เสร็จก่อน"
+        }), 404
+
+    key = f"{email}/{project}/{task_type}/{edge_format}"
+    edge_export_status[key] = {"status": "running", "progress": 0}
+
+    thread = threading.Thread(
+        target=run_edge_export,
+        args=(email, project, task_type, edge_format)
+    )
+    thread.start()
+
+    resp = jsonify({"success": True, "message": "Edge export started"})
+    resp.headers.add("Access-Control-Allow-Origin", "*")
+    return resp
+
+
+@app.route("/export_edge_status", methods=["POST"])
+def export_edge_status():
+    data = request.get_json(silent=True) or {}
+    email = data.get("email")
+    project = data.get("project")
+    task_type = (data.get("taskType") or "detection").strip().lower()
+    edge_format = (data.get("edgeFormat") or "onnx").strip().lower()
+
+    key = f"{email}/{project}/{task_type}/{edge_format}"
+    resp = jsonify(edge_export_status.get(key, {"status": "idle"}))
+    resp.headers.add("Access-Control-Allow-Origin", "*")
+    return resp
+
+
+@app.route("/download_edge_model", methods=["POST"])
+def download_edge_model():
+    data = request.get_json(silent=True) or {}
+    email = data.get("email")
+    project = data.get("project")
+    task_type = (data.get("taskType") or "detection").strip().lower()
+    edge_format = (data.get("edgeFormat") or "onnx").strip().lower()
+
+    if not email or not project or edge_format not in VALID_EDGE_FORMATS:
+        return jsonify({"success": False, "message": "Invalid request"}), 400
+
+    edge_storage_path = f"{email}/{project}/model_edge/{task_type}/{edge_format}.zip"
+    blob = bucket.blob(edge_storage_path)
+
+    if not blob.exists():
+        return jsonify({
+            "success": False,
+            "message": "ยังไม่มีไฟล์ export กรุณา export ก่อน"
+        }), 404
+
+    return send_file(
+        io.BytesIO(blob.download_as_bytes()),
+        mimetype="application/zip",
+        as_attachment=True,
+        download_name=f"{project}_{task_type}_{edge_format}.zip"
+    )
 # =========================================================
 # DELETE PROJECT
 # ลบทั้งโปรเจกต์:
