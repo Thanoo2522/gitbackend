@@ -3367,18 +3367,27 @@ def download_det_seg_model():
         download_name=f"{project}_{task_type}_yolov8_model.zip"
     )
 
+
 # =========================================================
-# 🌐 EXPORT FOR EDGE (ONNX / TFLite / NCNN)
+# 🌐 EXPORT FOR EDGE (ONNX / TFLite / NCNN / TensorRT)
 # ต่อยอดจาก best.pt ที่ train เสร็จแล้ว (model_det_seg/{task_type}/best.pt)
 # ใช้ ultralytics YOLO(...).export(format=...) ซึ่งกิน CPU/เวลาพอสมควร
 # จึงรันเป็น background thread + poll status เหมือน train_det_seg เดิม
+#
+# ⚠️ กรณีพิเศษ "engine" (TensorRT):
+#    TensorRT engine ต้อง build บน GPU สถาปัตยกรรมเดียวกับปลายทางจริงเท่านั้น
+#    (build ข้ามเครื่องไม่ได้) และ Cloud Run ไม่มี GPU เลย จึงทำได้แค่
+#    export เป็น ONNX ที่นี่ แล้วแนบสคริปต์ trtexec ให้ผู้ใช้ไป build
+#    .engine เองบนบอร์ด Jetson จริงตอนติดตั้งหน้างาน
 # =========================================================
 
 edge_export_status = {}   # key = f"{email}/{project}/{task_type}/{edge_format}"
 
-VALID_EDGE_FORMATS = ("onnx", "tflite", "ncnn")
+VALID_EDGE_FORMATS = ("onnx", "tflite", "ncnn", "engine")
 
 # format string ที่ ultralytics .export() ต้องการ ต่างจากชื่อที่โชว์ผู้ใช้เล็กน้อย
+# หมายเหตุ: "engine" ไม่ต้องมีใน map นี้ เพราะจัดการ special case แยกใน
+# run_edge_export() แล้ว (export เป็น onnx แทนเสมอ)
 EDGE_FORMAT_MAP = {
     "onnx": "onnx",
     "tflite": "tflite",
@@ -3392,6 +3401,42 @@ EDGE_FORMAT_IS_DIR = {
     "tflite": True,   # ultralytics สร้างเป็นโฟลเดอร์ {name}_saved_model/ พร้อม .tflite ข้างใน
     "ncnn": True,      # ultralytics สร้างเป็นโฟลเดอร์ {name}_ncnn_model/
 }
+
+
+def _build_trt_zip(zf, exported_onnx_path, project, task_type):
+    """
+    สร้างเนื้อหา zip สำหรับกรณี edge_format == "engine":
+    แนบ model.onnx + สคริปต์ build_engine.sh + README.txt
+    (ไม่ build .engine จริงที่นี่ เพราะ Cloud Run ไม่มี GPU)
+    """
+    zf.write(exported_onnx_path, "model.onnx")
+
+    build_script = f"""#!/bin/bash
+# ==========================================================
+# สคริปต์ build TensorRT engine จาก ONNX
+# ⚠️ ต้องรันบนบอร์ด Jetson จริง (Orin Nano/NX/AGX) ที่จะ deploy เท่านั้น
+#    ห้าม build บนเครื่องอื่นแล้วก๊อปปี้ .engine ไปใช้ข้ามบอร์ด
+#    ต้องติดตั้ง JetPack SDK (มี trtexec ติดมาให้อยู่แล้ว) ก่อนรัน
+# ==========================================================
+
+trtexec --onnx=model.onnx \\
+        --saveEngine=model.engine \\
+        --fp16 \\
+        --workspace=4096
+
+echo "✅ Build เสร็จแล้ว: model.engine"
+echo "นำไปใช้กับ project: {project} (task: {task_type})"
+"""
+    zf.writestr("build_engine.sh", build_script)
+
+    readme = """# วิธีใช้งาน
+
+1. คัดลอกไฟล์ model.onnx และ build_engine.sh ไปไว้บนบอร์ด Jetson ที่จะ deploy จริง
+2. รันคำสั่ง: chmod +x build_engine.sh && ./build_engine.sh
+3. จะได้ไฟล์ model.engine สำหรับใช้งานบนบอร์ดนั้นโดยเฉพาะ
+   (ห้ามนำ .engine ไปใช้ข้ามบอร์ดรุ่นอื่น ต้อง build ใหม่ทุกครั้งที่เปลี่ยนบอร์ด)
+"""
+    zf.writestr("README.txt", readme)
 
 
 def run_edge_export(email, project, task_type, edge_format):
@@ -3418,15 +3463,16 @@ def run_edge_export(email, project, task_type, edge_format):
         edge_export_status[key]["progress"] = 30
 
         # ----------------------------------------------------
-        # 2) โหลดโมเดลแล้วสั่ง export ตาม format ที่เลือก
-        #    imgsz=640 ให้ตรงกับตอน train (yolov8n/-seg เทรนที่ 640)
+        # 2) โหลดโมเดลแล้วสั่ง export
+        #    - engine -> export เป็น onnx แทน (ดู comment ด้านบนไฟล์)
+        #    - อื่นๆ  -> export ตาม format จริง
         # ----------------------------------------------------
         model = YOLO(local_pt_path)
 
-        export_kwargs = {"format": EDGE_FORMAT_MAP[edge_format], "imgsz": 640}
-
-        # tflite: ไม่ใส่ int8=True เพราะต้องใช้ calibration dataset เพิ่ม
-        # (ทำ float32 ก่อนเพื่อความง่าย/เสถียร ค่อยเพิ่ม int8 เป็น option ทีหลังได้)
+        if edge_format == "engine":
+            export_kwargs = {"format": "onnx", "imgsz": 640}
+        else:
+            export_kwargs = {"format": EDGE_FORMAT_MAP[edge_format], "imgsz": 640}
 
         exported_path = model.export(**export_kwargs)
         # exported_path คือ path (str) ของไฟล์หรือโฟลเดอร์หลักที่ export ออกมา
@@ -3435,12 +3481,14 @@ def run_edge_export(email, project, task_type, edge_format):
         edge_export_status[key]["progress"] = 80
 
         # ----------------------------------------------------
-        # 3) Zip ผลลัพธ์ทั้งหมด (ไฟล์เดี่ยวหรือทั้งโฟลเดอร์) แล้วอัปโหลดขึ้น Storage
+        # 3) Zip ผลลัพธ์ทั้งหมด (ไฟล์เดี่ยว/โฟลเดอร์/ONNX+script) แล้วอัปโหลดขึ้น Storage
         # ----------------------------------------------------
         zip_local_path = os.path.join(tmp_dir, f"edge_{edge_format}.zip")
 
         with zipfile.ZipFile(zip_local_path, "w", zipfile.ZIP_DEFLATED) as zf:
-            if EDGE_FORMAT_IS_DIR.get(edge_format) and os.path.isdir(exported_path):
+            if edge_format == "engine":
+                _build_trt_zip(zf, exported_path, project, task_type)
+            elif EDGE_FORMAT_IS_DIR.get(edge_format) and os.path.isdir(exported_path):
                 for root, _, files in os.walk(exported_path):
                     for fname in files:
                         local_file = os.path.join(root, fname)
@@ -3449,7 +3497,7 @@ def run_edge_export(email, project, task_type, edge_format):
             else:
                 zf.write(exported_path, os.path.basename(exported_path))
 
-            # แนบ classes.json เดิมไปด้วย เพราะฝั่ง edge ต้องใช้ mapping class เดียวกัน
+            # แนบ classes.json เดิมไปด้วยทุก format เพราะฝั่ง edge ต้องใช้ mapping class เดียวกัน
             labels_path = f"{email}/{project}/model_det_seg/{task_type}/classes.json"
             labels_blob = bucket.blob(labels_path)
             if labels_blob.exists():
@@ -3558,6 +3606,7 @@ def download_edge_model():
         as_attachment=True,
         download_name=f"{project}_{task_type}_{edge_format}.zip"
     )
+
 # =========================================================
 # DELETE PROJECT
 # ลบทั้งโปรเจกต์:
