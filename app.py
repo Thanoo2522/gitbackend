@@ -2776,1002 +2776,6 @@ def download_model():
         download_name=f"{project}_{export_format}.zip"
     )
 
-# =========================================================
-# EXPORT DATASET (Object Detection / Segmentation)
-# ⚠️ นี่ไม่ใช่ "เทรนโมเดล" จริง — ระบบยังไม่มี training pipeline สำหรับ
-#    Detection/Segmentation (มีแค่ Classification ที่ /train_project ด้านบน)
-#    ปุ่มนี้แค่แปลง annotation (bounding_boxes / polygons) ที่เก็บใน Firestore
-#    ให้เป็นฟอร์แมตมาตรฐานอุตสาหกรรม (YOLO หรือ COCO) พร้อมรูปภาพ แล้ว zip ให้โหลด
-#    ไปเทรนต่อเองด้วยเครื่องมืออื่น (เช่น Ultralytics YOLOv8, Detectron2, Colab)
-#
-# path อ่านข้อมูล (ตรงกับที่ /api/upload_dataset เขียน):
-#   detection    -> user/{email}/detection/{project}/images/{doc_id}
-#   segmentation -> user/{email}/Segment/{project}/images/{doc_id}
-# =========================================================
-def _yolo_normalize_bbox(box, img_w, img_h):
-    x_center = (box["x"] + box["w"] / 2) / img_w
-    y_center = (box["y"] + box["h"] / 2) / img_h
-    return x_center, y_center, box["w"] / img_w, box["h"] / img_h
-
-
-def _yolo_normalize_polygon(points, img_w, img_h):
-    return [(p["x"] / img_w, p["y"] / img_h) for p in points]
-
-
-@app.route("/export_dataset", methods=["POST", "OPTIONS"])
-def export_dataset():
-    if request.method == "OPTIONS":
-        response = jsonify({"success": True})
-        response.headers.add("Access-Control-Allow-Origin", "*")
-        response.headers.add("Access-Control-Allow-Headers", "Content-Type,Authorization")
-        response.headers.add("Access-Control-Allow-Methods", "POST,OPTIONS")
-        return response, 200
-
-    try:
-        data = request.get_json(silent=True) or {}
-        email = data.get("email")
-        project = data.get("project")
-        task_type = (data.get("taskType") or "detection").strip().lower()
-        export_format = (data.get("format") or "yolo").strip().lower()
-
-        if not email or not project:
-            return jsonify({"success": False, "message": "Missing email or project"}), 400
-
-        if export_format not in ("yolo", "coco"):
-            return jsonify({"success": False, "message": "format must be 'yolo' or 'coco'"}), 400
-
-        is_segmentation = task_type == "segmentation"
-        collection_name = "Segment" if is_segmentation else "detection"
-
-        image_docs = list(
-            worker_db.collection("user").document(email)
-            .collection(collection_name).document(project)
-            .collection("images").stream()
-        )
-
-        if not image_docs:
-            return jsonify({
-                "success": False,
-                "message": "ไม่พบรูปภาพในโปรเจกต์นี้ กรุณาบันทึกรูปภาพอย่างน้อย 1 รูปก่อน Export"
-            }), 404
-
-        # เก็บรายชื่อ class ทั้งหมด (อิง label ของแต่ละกล่อง/polygon จริง ไม่ใช่แค่ class_name ของภาพ)
-        class_names = []
-
-        def get_class_id(name):
-            if name not in class_names:
-                class_names.append(name)
-            return class_names.index(name)
-
-        zip_buffer = io.BytesIO()
-        with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
-
-            coco_images = []
-            coco_annotations = []
-            ann_id = 1
-
-            for idx, doc in enumerate(image_docs):
-                d = doc.to_dict() or {}
-                storage_path = d.get("storage_path")
-                img_w = d.get("image_width")
-                img_h = d.get("image_height")
-                filename = d.get("image_filename") or f"{doc.id}.jpg"
-
-                if not storage_path or not img_w or not img_h:
-                    continue  # ข้ามเอกสารที่ข้อมูลไม่ครบ (กันพัง ไม่ให้ export ทั้งชุดล้มเพราะรูปเดียว)
-
-                try:
-                    img_bytes = bucket.blob(storage_path).download_as_bytes()
-                except Exception:
-                    continue  # ไฟล์รูปหายจาก Storage ก็ข้ามไป ไม่ให้ทั้ง export ล้ม
-
-                zf.writestr(f"images/{filename}", img_bytes)
-
-                if export_format == "yolo":
-                    lines = []
-                    if is_segmentation:
-                        for poly in d.get("polygons", []):
-                            cid = get_class_id(poly.get("label", "object"))
-                            norm_pts = _yolo_normalize_polygon(poly.get("points", []), img_w, img_h)
-                            coords = " ".join(f"{x:.6f} {y:.6f}" for x, y in norm_pts)
-                            lines.append(f"{cid} {coords}")
-                    else:
-                        for box in d.get("bounding_boxes", []):
-                            cid = get_class_id(box.get("label", "object"))
-                            xc, yc, wn, hn = _yolo_normalize_bbox(box, img_w, img_h)
-                            lines.append(f"{cid} {xc:.6f} {yc:.6f} {wn:.6f} {hn:.6f}")
-
-                    label_filename = os.path.splitext(filename)[0] + ".txt"
-                    zf.writestr(f"labels/{label_filename}", "\n".join(lines))
-
-                else:  # coco
-                    image_id = idx + 1
-                    coco_images.append({
-                        "id": image_id,
-                        "file_name": f"images/{filename}",
-                        "width": img_w,
-                        "height": img_h
-                    })
-
-                    if is_segmentation:
-                        for poly in d.get("polygons", []):
-                            cid = get_class_id(poly.get("label", "object"))
-                            pts = poly.get("points", [])
-                            if not pts:
-                                continue
-                            xs = [p["x"] for p in pts]
-                            ys = [p["y"] for p in pts]
-                            seg_flat = []
-                            for p in pts:
-                                seg_flat.extend([p["x"], p["y"]])
-                            bbox = [min(xs), min(ys), max(xs) - min(xs), max(ys) - min(ys)]
-                            coco_annotations.append({
-                                "id": ann_id,
-                                "image_id": image_id,
-                                "category_id": cid + 1,
-                                "segmentation": [seg_flat],
-                                "bbox": bbox,
-                                "area": bbox[2] * bbox[3],
-                                "iscrowd": 0
-                            })
-                            ann_id += 1
-                    else:
-                        for box in d.get("bounding_boxes", []):
-                            cid = get_class_id(box.get("label", "object"))
-                            coco_annotations.append({
-                                "id": ann_id,
-                                "image_id": image_id,
-                                "category_id": cid + 1,
-                                "bbox": [box["x"], box["y"], box["w"], box["h"]],
-                                "area": box["w"] * box["h"],
-                                "iscrowd": 0
-                            })
-                            ann_id += 1
-
-            if export_format == "yolo":
-                zf.writestr("classes.txt", "\n".join(class_names))
-                data_yaml = (
-                    "path: .\n"
-                    "train: images\n"
-                    "val: images\n"
-                    f"nc: {len(class_names)}\n"
-                    f"names: {class_names}\n"
-                )
-                zf.writestr("data.yaml", data_yaml)
-            else:
-                coco_json = {
-                    "images": coco_images,
-                    "annotations": coco_annotations,
-                    "categories": [
-                        {"id": i + 1, "name": name} for i, name in enumerate(class_names)
-                    ]
-                }
-                zf.writestr("annotations.json", json.dumps(coco_json, ensure_ascii=False, indent=2))
-
-        zip_buffer.seek(0)
-
-        resp = send_file(
-            zip_buffer,
-            mimetype="application/zip",
-            as_attachment=True,
-            download_name=f"{project}_{task_type}_{export_format}.zip"
-        )
-        resp.headers.add("Access-Control-Allow-Origin", "*")
-        return resp
-
-    except Exception as e:
-        traceback.print_exc()
-        return jsonify({"success": False, "message": str(e)}), 500
-
-
-# =========================================================
-# 🚀 TRAIN DETECTION / SEGMENTATION (YOLOv8 จริง ผ่าน Ultralytics)
-# ⚠️ ต้อง `pip install ultralytics` เพิ่มใน requirements.txt ก่อน deploy
-#    และเปิด "CPU is always allocated" บน Cloud Run service นี้
-#    ไม่งั้น background thread จะหยุดทำงานหลัง response ถูกส่งกลับไปแล้ว
-#
-# รองรับเฉพาะฟอร์แมต YOLO เท่านั้น (COCO ยังคง export-only ผ่าน /export_dataset
-# เพราะ COCO ไม่ได้ผูกกับ trainer ตัวไหนตัวหนึ่งโดยเฉพาะ ต่างจาก YOLO ที่
-# ultralytics ใช้ฟอร์แมตนี้ตรงๆ ได้เลย)
-# =========================================================
-det_seg_training_status = {}   # key = f"{email}/{project}/{taskType}"
-
-
-def _build_yolo_dataset_on_disk(email, project, task_type, base_dir, val_ratio=0.2):
-    """
-    ดาวน์โหลดรูป + แปลง annotation เป็น YOLO format วางไว้ที่ base_dir ตามโครงสร้าง
-    ที่ ultralytics ต้องการ:
-      base_dir/images/train, base_dir/images/val
-      base_dir/labels/train, base_dir/labels/val
-    คืนค่า (class_names, total_images)
-    """
-    is_segmentation = task_type == "segmentation"
-    collection_name = "Segment" if is_segmentation else "detection"
-
-    image_docs = list(
-        worker_db.collection("user").document(email)
-        .collection(collection_name).document(project)
-        .collection("images").stream()
-    )
-
-    if not image_docs:
-        raise ValueError("ไม่พบรูปภาพในโปรเจกต์นี้ กรุณาบันทึกรูปภาพอย่างน้อย 1 รูปก่อนเทรน")
-
-    class_names = []
-
-    def get_class_id(name):
-        if name not in class_names:
-            class_names.append(name)
-        return class_names.index(name)
-
-    for sub in ("images/train", "images/val", "labels/train", "labels/val"):
-        os.makedirs(os.path.join(base_dir, sub), exist_ok=True)
-
-    n_docs = len(image_docs)
-    total = 0
-
-    for idx, doc in enumerate(image_docs):
-        d = doc.to_dict() or {}
-        storage_path = d.get("storage_path")
-        img_w = d.get("image_width")
-        img_h = d.get("image_height")
-        filename = d.get("image_filename") or f"{doc.id}.jpg"
-
-        if not storage_path or not img_w or not img_h:
-            continue
-
-        try:
-            img_bytes = bucket.blob(storage_path).download_as_bytes()
-        except Exception:
-            continue
-
-        # แบ่ง train/val ง่ายๆ ตาม val_ratio ถ้าข้อมูลน้อยเกินไป (<5 ภาพ) ให้ไป train หมด
-        split = "val" if (n_docs >= 5 and idx % max(2, int(1 / val_ratio)) == 0) else "train"
-
-        with open(os.path.join(base_dir, "images", split, filename), "wb") as f:
-            f.write(img_bytes)
-
-        lines = []
-        if is_segmentation:
-            for poly in d.get("polygons", []):
-                cid = get_class_id(poly.get("label", "object"))
-                norm_pts = _yolo_normalize_polygon(poly.get("points", []), img_w, img_h)
-                coords = " ".join(f"{x:.6f} {y:.6f}" for x, y in norm_pts)
-                lines.append(f"{cid} {coords}")
-        else:
-            for box in d.get("bounding_boxes", []):
-                cid = get_class_id(box.get("label", "object"))
-                xc, yc, wn, hn = _yolo_normalize_bbox(box, img_w, img_h)
-                lines.append(f"{cid} {xc:.6f} {yc:.6f} {wn:.6f} {hn:.6f}")
-
-        label_filename = os.path.splitext(filename)[0] + ".txt"
-        with open(os.path.join(base_dir, "labels", split, label_filename), "w") as f:
-            f.write("\n".join(lines))
-
-        total += 1
-
-    # กันเคส val ว่างเปล่า (ข้อมูลน้อยมาก) -> copy 1 ภาพจาก train มาเป็น val แทน
-    # (ultralytics ต้องการ val set เสมอ ต่อให้จะ evaluate ซ้ำกับ train ก็ตาม)
-    val_dir = os.path.join(base_dir, "images", "val")
-    if not os.listdir(val_dir):
-        train_dir = os.path.join(base_dir, "images", "train")
-        train_images = os.listdir(train_dir)
-        if train_images:
-            sample = train_images[0]
-            shutil.copy(os.path.join(train_dir, sample), os.path.join(val_dir, sample))
-            label_sample = os.path.splitext(sample)[0] + ".txt"
-            shutil.copy(
-                os.path.join(base_dir, "labels", "train", label_sample),
-                os.path.join(base_dir, "labels", "val", label_sample)
-            )
-
-    if total == 0:
-        raise ValueError("ไม่มีรูปภาพที่ข้อมูลครบสมบูรณ์พอจะใช้เทรนได้")
-
-    return class_names, total
-
-
-def run_det_seg_training(email, project, task_type):
-    key = f"{email}/{project}/{task_type}"
-    tmp_dir = tempfile.mkdtemp(prefix="yolo_train_")
-
-    try:
-        # import ตรงนี้ (ไม่ import ไว้บนสุดของไฟล์) เพื่อไม่ให้กระทบ startup time
-        # ของ service ถ้าไม่มีใครใช้ฟีเจอร์นี้เลย
-        from ultralytics import YOLO
-
-        class_names, total_images = _build_yolo_dataset_on_disk(email, project, task_type, tmp_dir)
-
-        data_yaml_path = os.path.join(tmp_dir, "data.yaml")
-        with open(data_yaml_path, "w") as f:
-            f.write(
-                f"path: {tmp_dir}\n"
-                f"train: images/train\n"
-                f"val: images/val\n"
-                f"nc: {len(class_names)}\n"
-                f"names: {class_names}\n"
-            )
-
-        det_seg_training_status[key]["progress"] = 10
-        det_seg_training_status[key]["total_images"] = total_images
-
-        base_weights = "yolov8n-seg.pt" if task_type == "segmentation" else "yolov8n.pt"
-        model = YOLO(base_weights)
-
-        EPOCHS = 30  # โมเดล nano + epoch น้อย เพื่อให้พอไหวบน CPU (Cloud Run ไม่มี GPU)
-
-        def on_epoch_end(trainer):
-            epoch = trainer.epoch + 1
-            pct = 10 + int((epoch / EPOCHS) * 85)
-            det_seg_training_status[key]["progress"] = min(pct, 95)
-
-        model.add_callback("on_train_epoch_end", on_epoch_end)
-
-        model.train(
-            data=data_yaml_path,
-            epochs=EPOCHS,
-            imgsz=640,
-            project=tmp_dir,
-            name="run",
-            verbose=False
-        )
-
-        best_path = os.path.join(tmp_dir, "run", "weights", "best.pt")
-        if not os.path.exists(best_path):
-            raise RuntimeError("ไม่พบไฟล์ best.pt หลังเทรนเสร็จ")
-
-        model_storage_path = f"{email}/{project}/model_det_seg/{task_type}/best.pt"
-        bucket.blob(model_storage_path).upload_from_filename(best_path)
-
-        labels_path = f"{email}/{project}/model_det_seg/{task_type}/classes.json"
-        bucket.blob(labels_path).upload_from_string(
-            json.dumps(class_names), content_type="application/json"
-        )
-
-        det_seg_training_status[key] = {
-            "status": "done",
-            "progress": 100,
-            "classes": class_names,
-            "total_images": total_images
-        }
-
-    except Exception as e:
-        traceback.print_exc()
-        det_seg_training_status[key] = {"status": "error", "message": str(e)}
-
-    finally:
-        shutil.rmtree(tmp_dir, ignore_errors=True)
-
-
-@app.route("/train_det_seg", methods=["POST", "OPTIONS"])
-def train_det_seg():
-    if request.method == "OPTIONS":
-        response = jsonify({"success": True})
-        response.headers.add("Access-Control-Allow-Origin", "*")
-        response.headers.add("Access-Control-Allow-Headers", "Content-Type,Authorization")
-        response.headers.add("Access-Control-Allow-Methods", "POST,OPTIONS")
-        return response, 200
-
-    data = request.get_json(silent=True) or {}
-    email = data.get("email")
-    project = data.get("project")
-    task_type = (data.get("taskType") or "detection").strip().lower()
-    export_format = (data.get("format") or "yolo").strip().lower()
-
-    if not email or not project:
-        return jsonify({"success": False, "message": "Missing email or project"}), 400
-
-    if export_format != "yolo":
-        return jsonify({
-            "success": False,
-            "message": "รองรับการเทรนจริงเฉพาะฟอร์แมต YOLO เท่านั้น "
-                       "(เลือก COCO เพื่อ Export แล้วนำไปเทรนเองภายนอกแทน)"
-        }), 400
-
-    key = f"{email}/{project}/{task_type}"
-    det_seg_training_status[key] = {"status": "running", "progress": 0}
-
-    thread = threading.Thread(target=run_det_seg_training, args=(email, project, task_type))
-    thread.start()
-
-    resp = jsonify({"success": True, "message": "Training started"})
-    resp.headers.add("Access-Control-Allow-Origin", "*")
-    return resp
-
-
-@app.route("/train_det_seg_status", methods=["POST"])
-def train_det_seg_status():
-    data = request.get_json(silent=True) or {}
-    task_type = (data.get("taskType") or "detection").strip().lower()
-    key = f"{data.get('email')}/{data.get('project')}/{task_type}"
-    resp = jsonify(det_seg_training_status.get(key, {"status": "idle"}))
-    resp.headers.add("Access-Control-Allow-Origin", "*")
-    return resp
-
-
-@app.route("/download_det_seg_model", methods=["POST"])
-def download_det_seg_model():
-    data = request.get_json(silent=True) or {}
-    email = data.get("email")
-    project = data.get("project")
-    task_type = (data.get("taskType") or "detection").strip().lower()
-
-    if not email or not project:
-        return jsonify({"success": False, "message": "Invalid request"}), 400
-
-    model_path = f"{email}/{project}/model_det_seg/{task_type}/best.pt"
-    labels_path = f"{email}/{project}/model_det_seg/{task_type}/classes.json"
-
-    model_blob = bucket.blob(model_path)
-    if not model_blob.exists():
-        return jsonify({"success": False, "message": "Model not found, กรุณา train ก่อน"}), 404
-
-    zip_buffer = io.BytesIO()
-    with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
-        zf.writestr("best.pt", model_blob.download_as_bytes())
-        labels_blob = bucket.blob(labels_path)
-        if labels_blob.exists():
-            zf.writestr("classes.json", labels_blob.download_as_bytes())
-
-    zip_buffer.seek(0)
-    return send_file(
-        zip_buffer,
-        mimetype="application/zip",
-        as_attachment=True,
-        download_name=f"{project}_{task_type}_yolov8_model.zip"
-    )
-
-
-# =========================================================
-# 🌐 EXPORT FOR EDGE (ONNX / TFLite / NCNN / TensorRT)
-# ต่อยอดจาก best.pt ที่ train เสร็จแล้ว (model_det_seg/{task_type}/best.pt)
-# ใช้ ultralytics YOLO(...).export(format=...) ซึ่งกิน CPU/เวลาพอสมควร
-# จึงรันเป็น background thread + poll status เหมือน train_det_seg เดิม
-#
-# ⚠️ กรณีพิเศษ "engine" (TensorRT):
-#    TensorRT engine ต้อง build บน GPU สถาปัตยกรรมเดียวกับปลายทางจริงเท่านั้น
-#    (build ข้ามเครื่องไม่ได้) และ Cloud Run ไม่มี GPU เลย จึงทำได้แค่
-#    export เป็น ONNX ที่นี่ แล้วแนบสคริปต์ trtexec ให้ผู้ใช้ไป build
-#    .engine เองบนบอร์ด Jetson จริงตอนติดตั้งหน้างาน
-# =========================================================
-
-edge_export_status = {}   # key = f"{email}/{project}/{task_type}/{edge_format}"
-
-VALID_EDGE_FORMATS = ("onnx", "tflite", "ncnn", "engine")
-
-# format string ที่ ultralytics .export() ต้องการ ต่างจากชื่อที่โชว์ผู้ใช้เล็กน้อย
-# หมายเหตุ: "engine" ไม่ต้องมีใน map นี้ เพราะจัดการ special case แยกใน
-# run_edge_export() แล้ว (export เป็น onnx แทนเสมอ)
-EDGE_FORMAT_MAP = {
-    "onnx": "onnx",
-    "tflite": "tflite",
-    "ncnn": "ncnn",
-}
-
-# นามสกุลไฟล์ผลลัพธ์หลักที่ ultralytics สร้างให้ต่อ format
-# (tflite และ ncnn จริงๆ ได้ "โฟลเดอร์" ออกมา ไม่ใช่ไฟล์เดี่ยว จึงต้อง zip ทั้งโฟลเดอร์)
-EDGE_FORMAT_IS_DIR = {
-    "onnx": False,
-    "tflite": True,   # ultralytics สร้างเป็นโฟลเดอร์ {name}_saved_model/ พร้อม .tflite ข้างใน
-    "ncnn": True,      # ultralytics สร้างเป็นโฟลเดอร์ {name}_ncnn_model/
-}
-
-
-def _build_trt_zip(zf, exported_onnx_path, project, task_type):
-    """
-    สร้างเนื้อหา zip สำหรับกรณี edge_format == "engine":
-    แนบ model.onnx + สคริปต์ build_engine.sh + README.txt
-    (ไม่ build .engine จริงที่นี่ เพราะ Cloud Run ไม่มี GPU)
-    """
-    zf.write(exported_onnx_path, "model.onnx")
-
-    build_script = f"""#!/bin/bash
-# ==========================================================
-# สคริปต์ build TensorRT engine จาก ONNX
-# ⚠️ ต้องรันบนบอร์ด Jetson จริง (Orin Nano/NX/AGX) ที่จะ deploy เท่านั้น
-#    ห้าม build บนเครื่องอื่นแล้วก๊อปปี้ .engine ไปใช้ข้ามบอร์ด
-#    ต้องติดตั้ง JetPack SDK (มี trtexec ติดมาให้อยู่แล้ว) ก่อนรัน
-# ==========================================================
-
-trtexec --onnx=model.onnx \\
-        --saveEngine=model.engine \\
-        --fp16 \\
-        --workspace=4096
-
-echo "✅ Build เสร็จแล้ว: model.engine"
-echo "นำไปใช้กับ project: {project} (task: {task_type})"
-"""
-    zf.writestr("build_engine.sh", build_script)
-
-    readme = """# วิธีใช้งาน
-
-1. คัดลอกไฟล์ model.onnx และ build_engine.sh ไปไว้บนบอร์ด Jetson ที่จะ deploy จริง
-2. รันคำสั่ง: chmod +x build_engine.sh && ./build_engine.sh
-3. จะได้ไฟล์ model.engine สำหรับใช้งานบนบอร์ดนั้นโดยเฉพาะ
-   (ห้ามนำ .engine ไปใช้ข้ามบอร์ดรุ่นอื่น ต้อง build ใหม่ทุกครั้งที่เปลี่ยนบอร์ด)
-"""
-    zf.writestr("README.txt", readme)
-
-
-def run_edge_export(email, project, task_type, edge_format):
-    key = f"{email}/{project}/{task_type}/{edge_format}"
-    tmp_dir = tempfile.mkdtemp(prefix="edge_export_")
-
-    try:
-        from ultralytics import YOLO
-
-        edge_export_status[key]["progress"] = 10
-
-        # ----------------------------------------------------
-        # 1) ดาวน์โหลด best.pt จาก Storage มาไว้ที่ tmp_dir ก่อน
-        # ----------------------------------------------------
-        model_storage_path = f"{email}/{project}/model_det_seg/{task_type}/best.pt"
-        model_blob = bucket.blob(model_storage_path)
-
-        if not model_blob.exists():
-            raise ValueError("ไม่พบ best.pt กรุณา train โมเดลให้เสร็จก่อน")
-
-        local_pt_path = os.path.join(tmp_dir, "best.pt")
-        model_blob.download_to_filename(local_pt_path)
-
-        edge_export_status[key]["progress"] = 30
-
-        # ----------------------------------------------------
-        # 2) โหลดโมเดลแล้วสั่ง export
-        #    - engine -> export เป็น onnx แทน (ดู comment ด้านบนไฟล์)
-        #    - อื่นๆ  -> export ตาม format จริง
-        # ----------------------------------------------------
-        model = YOLO(local_pt_path)
-
-        if edge_format == "engine":
-            export_kwargs = {"format": "onnx", "imgsz": 640}
-        else:
-            export_kwargs = {"format": EDGE_FORMAT_MAP[edge_format], "imgsz": 640}
-
-        exported_path = model.export(**export_kwargs)
-        # exported_path คือ path (str) ของไฟล์หรือโฟลเดอร์หลักที่ export ออกมา
-        # อยู่ข้างๆ best.pt ใน tmp_dir เดียวกัน
-
-        edge_export_status[key]["progress"] = 80
-
-        # ----------------------------------------------------
-        # 3) Zip ผลลัพธ์ทั้งหมด (ไฟล์เดี่ยว/โฟลเดอร์/ONNX+script) แล้วอัปโหลดขึ้น Storage
-        # ----------------------------------------------------
-        zip_local_path = os.path.join(tmp_dir, f"edge_{edge_format}.zip")
-
-        with zipfile.ZipFile(zip_local_path, "w", zipfile.ZIP_DEFLATED) as zf:
-            if edge_format == "engine":
-                _build_trt_zip(zf, exported_path, project, task_type)
-            elif EDGE_FORMAT_IS_DIR.get(edge_format) and os.path.isdir(exported_path):
-                for root, _, files in os.walk(exported_path):
-                    for fname in files:
-                        local_file = os.path.join(root, fname)
-                        arcname = os.path.relpath(local_file, tmp_dir)
-                        zf.write(local_file, arcname)
-            else:
-                zf.write(exported_path, os.path.basename(exported_path))
-
-            # แนบ classes.json เดิมไปด้วยทุก format เพราะฝั่ง edge ต้องใช้ mapping class เดียวกัน
-            labels_path = f"{email}/{project}/model_det_seg/{task_type}/classes.json"
-            labels_blob = bucket.blob(labels_path)
-            if labels_blob.exists():
-                zf.writestr("classes.json", labels_blob.download_as_bytes())
-
-        edge_storage_path = f"{email}/{project}/model_edge/{task_type}/{edge_format}.zip"
-        bucket.blob(edge_storage_path).upload_from_filename(zip_local_path)
-
-        edge_export_status[key] = {
-            "status": "done",
-            "progress": 100,
-            "format": edge_format
-        }
-
-    except Exception as e:
-        traceback.print_exc()
-        edge_export_status[key] = {"status": "error", "message": str(e)}
-
-    finally:
-        shutil.rmtree(tmp_dir, ignore_errors=True)
-
-
-@app.route("/export_edge_format", methods=["POST", "OPTIONS"])
-def export_edge_format():
-    if request.method == "OPTIONS":
-        response = jsonify({"success": True})
-        response.headers.add("Access-Control-Allow-Origin", "*")
-        response.headers.add("Access-Control-Allow-Headers", "Content-Type,Authorization")
-        response.headers.add("Access-Control-Allow-Methods", "POST,OPTIONS")
-        return response, 200
-
-    data = request.get_json(silent=True) or {}
-    email = data.get("email")
-    project = data.get("project")
-    task_type = (data.get("taskType") or "detection").strip().lower()
-    edge_format = (data.get("edgeFormat") or "onnx").strip().lower()
-
-    if not email or not project:
-        return jsonify({"success": False, "message": "Missing email or project"}), 400
-
-    if edge_format not in VALID_EDGE_FORMATS:
-        return jsonify({
-            "success": False,
-            "message": f"edgeFormat must be one of {VALID_EDGE_FORMATS}"
-        }), 400
-
-    # เช็คว่ามี best.pt อยู่จริงก่อนเริ่ม thread (ตอบ error ทันที ไม่ต้องรอ poll)
-    model_storage_path = f"{email}/{project}/model_det_seg/{task_type}/best.pt"
-    if not bucket.blob(model_storage_path).exists():
-        return jsonify({
-            "success": False,
-            "message": "ไม่พบโมเดลที่ train แล้ว กรุณา train ให้เสร็จก่อน"
-        }), 404
-
-    key = f"{email}/{project}/{task_type}/{edge_format}"
-    edge_export_status[key] = {"status": "running", "progress": 0}
-
-    thread = threading.Thread(
-        target=run_edge_export,
-        args=(email, project, task_type, edge_format)
-    )
-    thread.start()
-
-    resp = jsonify({"success": True, "message": "Edge export started"})
-    resp.headers.add("Access-Control-Allow-Origin", "*")
-    return resp
-
-
-@app.route("/export_edge_status", methods=["POST"])
-def export_edge_status():
-    data = request.get_json(silent=True) or {}
-    email = data.get("email")
-    project = data.get("project")
-    task_type = (data.get("taskType") or "detection").strip().lower()
-    edge_format = (data.get("edgeFormat") or "onnx").strip().lower()
-
-    key = f"{email}/{project}/{task_type}/{edge_format}"
-    resp = jsonify(edge_export_status.get(key, {"status": "idle"}))
-    resp.headers.add("Access-Control-Allow-Origin", "*")
-    return resp
-
-
-@app.route("/download_edge_model", methods=["POST"])
-def download_edge_model():
-    data = request.get_json(silent=True) or {}
-    email = data.get("email")
-    project = data.get("project")
-    task_type = (data.get("taskType") or "detection").strip().lower()
-    edge_format = (data.get("edgeFormat") or "onnx").strip().lower()
-
-    if not email or not project or edge_format not in VALID_EDGE_FORMATS:
-        return jsonify({"success": False, "message": "Invalid request"}), 400
-
-    edge_storage_path = f"{email}/{project}/model_edge/{task_type}/{edge_format}.zip"
-    blob = bucket.blob(edge_storage_path)
-
-    if not blob.exists():
-        return jsonify({
-            "success": False,
-            "message": "ยังไม่มีไฟล์ export กรุณา export ก่อน"
-        }), 404
-
-    return send_file(
-        io.BytesIO(blob.download_as_bytes()),
-        mimetype="application/zip",
-        as_attachment=True,
-        download_name=f"{project}_{task_type}_{edge_format}.zip"
-    )
-
-# =========================================================
-# DELETE PROJECT
-# ลบทั้งโปรเจกต์:
-#   1) Storage   : ลบไฟล์ทุกไฟล์ใต้ path  {email}/{project}/...
-#                  เช่น /enthongsri@gmail.com/capcolor/...
-#   2) Firestore : ลบ document ที่ path
-#                  user/{email}/dataset_session/{project}
-#
-# วางต่อท้ายไฟล์ app.py เดิม (ใช้ตัวแปร bucket / worker_db
-# ที่ประกาศไว้แล้วด้านบนของไฟล์ ไม่ต้อง import เพิ่ม)
-# =========================================================
-@app.route("/delete_project", methods=["POST"])
-def delete_project():
-    try:
-        data = request.get_json(force=True) or {}
-
-        email = data.get("email")
-        project = data.get("project")
-
-        if not email or not project:
-            return jsonify({
-                "status": "error",
-                "message": "Missing email or project"
-            }), 400
-
-        # ---------------------------------------------------
-        # 1) ลบไฟล์ทั้งหมดใน Storage ใต้ path {email}/{project}/
-        # ---------------------------------------------------
-        prefix = f"{email}/{project}/"
-
-        blobs = list(bucket.list_blobs(prefix=prefix))
-
-        for blob in blobs:
-            blob.delete()
-
-        # ---------------------------------------------------
-        # 2) ลบ Firestore document:
-        #    user/{email}/dataset_session/{project}
-        # ---------------------------------------------------
-        doc_ref = (
-            worker_db
-            .collection("user")
-            .document(email)
-            .collection("dataset_session")
-            .document(project)
-        )
-
-        doc_ref.delete()
-
-        return jsonify({
-            "status": "ok",
-            "deleted_files": len(blobs)
-        })
-
-    except Exception as e:
-        traceback.print_exc()
-
-        return jsonify({
-            "status": "error",
-            "message": str(e)
-        }), 500
-#===========================================================
-@app.route("/list_servers", methods=["GET"])
-@require_admin_key
-def list_servers():
-    try:
-        servers = []
-
-        docs = (
-            hub_db.collection("hub_system")
-            .document("server_pool")
-            .collection("servers")
-            .stream()
-        )
-
-        now = int(time.time())
-
-        for doc in docs:
-            data = doc.to_dict() or {}
-            last_heartbeat = data.get("last_heartbeat", 0)
-
-            # ไม่มี heartbeat เข้ามาเกิน 90 วิ ถือว่า offline
-            is_online = (now - last_heartbeat) <= 90
-
-            servers.append({
-                "server_id": doc.id,
-                "cloud_url": data.get("cloud_url", ""),
-                "status": "online" if is_online else "offline",
-                "active_users": data.get("active_users", 0),
-                "load_score": data.get("load_score", 0),
-                "last_heartbeat": last_heartbeat
-            })
-
-        servers.sort(key=lambda s: s["server_id"])
-
-        return jsonify({
-            "status": "success",
-            "servers": servers
-        })
-
-    except Exception as e:
-        traceback.print_exc()
-        return jsonify({
-            "status": "error",
-            "message": str(e)
-        }), 500
- #=======================================  
-# =========================================================
-# ENDPOINT: รับแจ้งชำระเงิน และบันทึกลง FIREBASE (UPDATE TYPE)
-# =========================================================
-@app.route("/api/payment/confirm", methods=["POST"])
-def confirm_payment():
-    try:
-        # 1. ดึงข้อมูล Text จาก FormData
-        email = request.form.get("email")
-        amount = request.form.get("amount")
-        bank = request.form.get("bank")
-        transfer_time = request.form.get("transfer_time")
-
-        # ตรวจสอบค่าห้ามว่าง
-        if not email or not amount or not bank or not transfer_time:
-            return jsonify({"error": "Missing required text fields"}), 400
-
-        # 2. ดึงไฟล์รูปภาพสลิป
-        if "slip" not in request.files:
-            return jsonify({"error": "Missing slip image file"}), 400
-        
-        file = request.files["slip"]
-        if not file or file.filename == "":
-            return jsonify({"error": "No file selected"}), 400
-
-        # ป้องกัน Pylance แจ้งเตือนเรื่อง Type "str | None"
-        filename = file.filename if file.filename is not None else "slip.jpg"
-        file_ext = os.path.splitext(filename)[1] or ".jpg"
-        unique_filename = f"{uuid.uuid4()}{file_ext}"
-
-        # 3. อัปโหลดรูปสลิปขึ้น Firebase Storage (worker_app)
-        # ปลายทาง path -> /{email}/"payment"/{filename}
-        storage_path = f"{email}/payment/{unique_filename}"
-        blob = bucket.blob(storage_path)
-        
-        # อ่านไฟล์และกำหนด Content-Type แบบปลอดภัยจาก None
-        file_stream = file.read()
-        content_type = file.content_type if file.content_type is not None else "image/jpeg"
-        
-        blob.upload_from_string(file_stream, content_type=content_type)
-        
-        # ทำการสิทธิ์เปิดดูรูปภาพผ่านลิงก์สาธารณะ
-        blob.make_public()
-        slip_url = blob.public_url
-
-        # 4. บันทึกข้อมูลอื่นๆ ลง Firestore (worker_db)
-        # ปลายทาง path -> /user/{email}/"payment"/"data"/records/{random_id}
-        payment_data = {
-            "amount": float(amount),
-            "bank": bank,
-            "transfer_time": transfer_time,
-            "slip_url": slip_url,
-            "storage_path": storage_path,
-            "created_at": firestore.SERVER_TIMESTAMP,
-            "status": "pending"  # ตั้งสถานะเริ่มต้นรอการตรวจสอบ
-        }
-       #doc_ref = worker_db.collection("user").document(email).collection("payment").document("data").collection("records").document()
-        doc_ref = worker_db.collection("user").document(email).collection("payment").document()
-        doc_ref.set(payment_data)
-
-        return jsonify({
-            "message": "Payment confirmation submitted successfully",
-            "doc_id": doc_ref.id,
-            "slip_url": slip_url
-        }), 200
-
-    except Exception as e:
-        print("--- PAYMENT SUBMIT ERROR ---")
-        traceback.print_exc()
-        return jsonify({"error": str(e)}), 500     
-# =========================================================
-# LIST CLASS IMAGES
-#   Storage path: {email}/{project}/class/{className}/...
-#   ส่งกลับรูปแบบ pagination รอบละ `limit` รูป (default 50)
-#
-# วางต่อท้ายไฟล์ app.py เดิม (ใช้ bucket ที่ประกาศไว้แล้ว
-# ไม่ต้อง import เพิ่ม เพราะ timedelta ถูก import ไว้แล้วด้านบน)
-# =========================================================
-@app.route("/list_class_images", methods=["POST"])
-def list_class_images():
-    try:
-        data = request.get_json(force=True) or {}
-
-        email = data.get("email")
-        project = data.get("project")
-        class_name = data.get("className")
-        offset = int(data.get("offset", 0))
-        limit = int(data.get("limit", 50))
-
-        if not email or not project or not class_name:
-            return jsonify({
-                "status": "error",
-                "message": "Missing email, project or className"
-            }), 400
-
-        prefix = f"{email}/{project}/class/{class_name}/"
-
-        all_blobs = list(bucket.list_blobs(prefix=prefix))
-        all_blobs.sort(key=lambda b: b.name)
-
-        page_blobs = all_blobs[offset: offset + limit]
-
-        images = []
-
-        for blob in page_blobs:
-            file_name = blob.name.split("/")[-1]
-
-            # signed url ใช้แสดงรูปได้ชั่วคราว (2 ชม.) โดยไม่ต้องเปิด public bucket
-            url = blob.generate_signed_url(
-                expiration=timedelta(hours=2)
-            )
-
-            images.append({
-                "name": file_name,
-                "url": url
-            })
-
-        has_more = (offset + limit) < len(all_blobs)
-
-        return jsonify({
-            "status": "ok",
-            "images": images,
-            "total": len(all_blobs),
-            "hasMore": has_more
-        })
-
-    except Exception as e:
-        traceback.print_exc()
-
-        return jsonify({
-            "status": "error",
-            "message": str(e)
-        }), 500
-
-
-# =========================================================
-# DELETE SINGLE IMAGE
-#   Storage  : {email}/{project}/class/{className}/{fileName}
-#   Firestore: {email}/{project}/class/{className}
-#              (ลด total_images -1 และตัดชื่อไฟล์ออกจาก
-#               field "images" ถ้ามีการเก็บ array ไว้)
-# =========================================================
-@app.route("/delete_image", methods=["POST"])
-def delete_image():
-    try:
-        data = request.get_json(force=True) or {}
-
-        email = data.get("email")
-        project = data.get("project")
-        class_name = data.get("className")
-        file_name = data.get("fileName")
-
-        if not email or not project or not class_name or not file_name:
-            return jsonify({
-                "status": "error",
-                "message": "Missing email, project, className or fileName"
-            }), 400
-
-        # ---------------------------------------------------
-        # 1) ลบไฟล์รูปจาก Storage
-        # ---------------------------------------------------
-        blob_path = f"{email}/{project}/class/{class_name}/{file_name}"
-        blob = bucket.blob(blob_path)
-
-        if blob.exists():
-            blob.delete()
-
-        # ---------------------------------------------------
-        # 2) อัปเดต Firestore document ของ class นี้
-        #    path: {email}/{project}/class/{className}
-        #    (ไม่ให้ error ตรงนี้ทำให้ทั้ง request fail
-        #     เพราะไฟล์ถูกลบออกจาก Storage สำเร็จไปแล้ว)
-        # ---------------------------------------------------
-        try:
-            class_ref = (
-                worker_db
-                .collection("user")
-                .document(email)
-                .collection("dataset_session")
-                .document(project)
-                .collection("class")
-                .document(class_name)
-            )
-
-            # ลบ document รูปนี้ออกจาก subcollection images (สมมติ doc id = fileName)
-            class_ref.collection("images").document(file_name).delete()
-
-            # ลด total_images บน class doc เอง (ถ้ามี field นี้เก็บอยู่)
-            class_ref.update({
-                "total_images": firestore.Increment(-1)
-            })
-
-        except Exception:
-            traceback.print_exc()
-
-        return jsonify({
-            "status": "ok"
-        })
-
-    except Exception as e:
-        traceback.print_exc()
-        return jsonify({
-            "status": "error",
-            "message": str(e)
-        }), 500  
 #===================keep dataset =====================================     
 try:
     RESAMPLE_BICUBIC = Image.Resampling.BICUBIC
@@ -3789,20 +2793,6 @@ PIXEL_LEVEL_MODES = {
     "brightness_dark", "brightness_bright",
     "contrast_low", "contrast_high",
     "saturation_low", "saturation_high",
-}
-
-# 🌟 ประเภทงานที่รองรับ -> ใช้เลือกทั้งชื่อ collection ใน Firestore และโฟลเดอร์ใน Storage
-# "detection"    -> /user/{email}/detection/{project}/images/{doc_id}   , storage: {email}/Detection/{project}/...
-# "segmentation" -> /user/{email}/Segment/{project}/images/{doc_id}    , storage: {email}/Segment/{project}/...
-PROJECT_TYPE_CONFIG = {
-    "detection": {
-        "collection": "detection",
-        "storage_folder": "Detection",
-    },
-    "segmentation": {
-        "collection": "Segment",
-        "storage_folder": "Segment",
-    },
 }
 
 
@@ -4045,8 +3035,689 @@ def _cors(resp):
     return resp
 
 
-@app.route("/api/upload_dataset", methods=["POST", "OPTIONS"])
-def upload_dataset():
+# =========================================================
+# 🌟 V2: EXPORT / TRAIN / EDGE-EXPORT — Mixed Annotation
+# (bounding_boxes + polygons ในโปรเจกต์เดียวกัน อ่านจาก
+#  user/{email}/project/{project}/images ที่เดียว ไม่มี taskType แล้ว)
+#
+# แนวคิดหลัก: Bounding Box แปลงเป็น polygon สี่เหลี่ยม 4 จุด (มุมกล่อง)
+# แล้วเทรนรวมกับ Polygon จริงด้วย YOLOv8-seg เสมอ (yolov8n-seg.pt)
+# เพราะ segmentation เป็น superset ของ detection — โมเดลเดียวให้ทั้ง
+# mask และ bounding box ทำให้ label สองแบบอยู่ในชุดเทรนเดียวกันได้จริง
+# =========================================================
+
+def _yolo_normalize_polygon(points, img_w, img_h):
+    return [(p["x"] / img_w, p["y"] / img_h) for p in points]
+
+
+def _yolo_normalize_bbox_as_polygon(box, img_w, img_h):
+    """
+    แปลง bounding box (x,y,w,h) เป็นจุด 4 มุมของสี่เหลี่ยม normalized 0-1
+    เพื่อรวมเทรนกับ polygon จริงในฟอร์แมต YOLO-seg เดียวกันได้
+    """
+    x, y, w, h = box["x"], box["y"], box["w"], box["h"]
+    corners = [(x, y), (x + w, y), (x + w, y + h), (x, y + h)]
+    return [(px / img_w, py / img_h) for px, py in corners]
+
+
+# ==========================================================
+# 📦 EXPORT DATASET (YOLO-seg / COCO) — mixed annotation
+# ==========================================================
+@app.route("/export_dataset", methods=["POST", "OPTIONS"])
+def export_dataset():
+    if request.method == "OPTIONS":
+        response = jsonify({"success": True})
+        response.headers.add("Access-Control-Allow-Origin", "*")
+        response.headers.add("Access-Control-Allow-Headers", "Content-Type,Authorization")
+        response.headers.add("Access-Control-Allow-Methods", "POST,OPTIONS")
+        return response, 200
+
+    try:
+        data = request.get_json(silent=True) or {}
+        email = data.get("email")
+        project = data.get("project")
+        export_format = (data.get("format") or "yolo").strip().lower()
+
+        if not email or not project:
+            return jsonify({"success": False, "message": "Missing email or project"}), 400
+
+        if export_format not in ("yolo", "coco"):
+            return jsonify({"success": False, "message": "format must be 'yolo' or 'coco'"}), 400
+
+        image_docs = list(
+            worker_db.collection("user").document(email)
+            .collection("project").document(project)
+            .collection("images").stream()
+        )
+
+        if not image_docs:
+            return jsonify({
+                "success": False,
+                "message": "ไม่พบรูปภาพในโปรเจกต์นี้ กรุณาบันทึกรูปภาพอย่างน้อย 1 รูปก่อน Export"
+            }), 404
+
+        class_names = []
+
+        def get_class_id(name):
+            if name not in class_names:
+                class_names.append(name)
+            return class_names.index(name)
+
+        zip_buffer = io.BytesIO()
+        with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+
+            coco_images = []
+            coco_annotations = []
+            ann_id = 1
+
+            for idx, doc in enumerate(image_docs):
+                d = doc.to_dict() or {}
+                storage_path = d.get("storage_path")
+                img_w = d.get("image_width")
+                img_h = d.get("image_height")
+                filename = d.get("image_filename") or f"{doc.id}.jpg"
+
+                if not storage_path or not img_w or not img_h:
+                    continue
+
+                try:
+                    img_bytes = bucket.blob(storage_path).download_as_bytes()
+                except Exception:
+                    continue
+
+                zf.writestr(f"images/{filename}", img_bytes)
+
+                boxes = d.get("bounding_boxes", [])
+                polys = d.get("polygons", [])
+
+                if export_format == "yolo":
+                    lines = []
+
+                    # polygon จริง ใช้จุดตามที่วาดไว้เป๊ะๆ
+                    for poly in polys:
+                        cid = get_class_id(poly.get("label", "object"))
+                        norm_pts = _yolo_normalize_polygon(poly.get("points", []), img_w, img_h)
+                        coords = " ".join(f"{x:.6f} {y:.6f}" for x, y in norm_pts)
+                        lines.append(f"{cid} {coords}")
+
+                    # bounding box แปลงเป็น polygon สี่เหลี่ยม 4 จุด ให้อยู่ฟอร์แมตเดียวกับ polygon จริง
+                    for box in boxes:
+                        cid = get_class_id(box.get("label", "object"))
+                        norm_pts = _yolo_normalize_bbox_as_polygon(box, img_w, img_h)
+                        coords = " ".join(f"{x:.6f} {y:.6f}" for x, y in norm_pts)
+                        lines.append(f"{cid} {coords}")
+
+                    label_filename = os.path.splitext(filename)[0] + ".txt"
+                    zf.writestr(f"labels/{label_filename}", "\n".join(lines))
+
+                else:  # coco
+                    image_id = idx + 1
+                    coco_images.append({
+                        "id": image_id,
+                        "file_name": f"images/{filename}",
+                        "width": img_w,
+                        "height": img_h
+                    })
+
+                    for poly in polys:
+                        cid = get_class_id(poly.get("label", "object"))
+                        pts = poly.get("points", [])
+                        if not pts:
+                            continue
+                        xs = [p["x"] for p in pts]
+                        ys = [p["y"] for p in pts]
+                        seg_flat = []
+                        for p in pts:
+                            seg_flat.extend([p["x"], p["y"]])
+                        bbox = [min(xs), min(ys), max(xs) - min(xs), max(ys) - min(ys)]
+                        coco_annotations.append({
+                            "id": ann_id,
+                            "image_id": image_id,
+                            "category_id": cid + 1,
+                            "segmentation": [seg_flat],
+                            "bbox": bbox,
+                            "area": bbox[2] * bbox[3],
+                            "iscrowd": 0
+                        })
+                        ann_id += 1
+
+                    for box in boxes:
+                        cid = get_class_id(box.get("label", "object"))
+                        coco_annotations.append({
+                            "id": ann_id,
+                            "image_id": image_id,
+                            "category_id": cid + 1,
+                            "bbox": [box["x"], box["y"], box["w"], box["h"]],
+                            "area": box["w"] * box["h"],
+                            "iscrowd": 0
+                        })
+                        ann_id += 1
+
+            if export_format == "yolo":
+                zf.writestr("classes.txt", "\n".join(class_names))
+                data_yaml = (
+                    "path: .\n"
+                    "train: images\n"
+                    "val: images\n"
+                    f"nc: {len(class_names)}\n"
+                    f"names: {class_names}\n"
+                )
+                zf.writestr("data.yaml", data_yaml)
+            else:
+                coco_json = {
+                    "images": coco_images,
+                    "annotations": coco_annotations,
+                    "categories": [
+                        {"id": i + 1, "name": name} for i, name in enumerate(class_names)
+                    ]
+                }
+                zf.writestr("annotations.json", json.dumps(coco_json, ensure_ascii=False, indent=2))
+
+        zip_buffer.seek(0)
+
+        resp = send_file(
+            zip_buffer,
+            mimetype="application/zip",
+            as_attachment=True,
+            download_name=f"{project}_{export_format}.zip"
+        )
+        resp.headers.add("Access-Control-Allow-Origin", "*")
+        return resp
+
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"success": False, "message": str(e)}), 500
+
+
+# =========================================================
+# 🚀 TRAIN (YOLOv8-seg จริง ผ่าน Ultralytics) — mixed annotation
+# ⚠️ ต้อง `pip install ultralytics` และเปิด "CPU is always allocated"
+#    บน Cloud Run service นี้ ไม่งั้น background thread จะหยุดทำงาน
+#    หลัง response ถูกส่งกลับไปแล้ว
+# =========================================================
+det_seg_training_status = {}   # key = f"{email}/{project}"
+
+
+def _build_yolo_seg_dataset_on_disk(email, project, base_dir, val_ratio=0.2):
+    """
+    ดาวน์โหลดรูป + แปลง annotation (ทั้ง bounding_boxes และ polygons ที่อยู่ในภาพเดียวกัน)
+    เป็น YOLO-seg format เดียวกันหมด (กล่องแปลงเป็น polygon สี่เหลี่ยม 4 จุด)
+    ทำให้เทรนโปรเจกต์ที่ label ปนกันได้ในโมเดลเดียว
+    คืนค่า (class_names, total_images)
+    """
+    image_docs = list(
+        worker_db.collection("user").document(email)
+        .collection("project").document(project)
+        .collection("images").stream()
+    )
+
+    if not image_docs:
+        raise ValueError("ไม่พบรูปภาพในโปรเจกต์นี้ กรุณาบันทึกรูปภาพอย่างน้อย 1 รูปก่อนเทรน")
+
+    class_names = []
+
+    def get_class_id(name):
+        if name not in class_names:
+            class_names.append(name)
+        return class_names.index(name)
+
+    for sub in ("images/train", "images/val", "labels/train", "labels/val"):
+        os.makedirs(os.path.join(base_dir, sub), exist_ok=True)
+
+    n_docs = len(image_docs)
+    total = 0
+
+    for idx, doc in enumerate(image_docs):
+        d = doc.to_dict() or {}
+        storage_path = d.get("storage_path")
+        img_w = d.get("image_width")
+        img_h = d.get("image_height")
+        filename = d.get("image_filename") or f"{doc.id}.jpg"
+
+        if not storage_path or not img_w or not img_h:
+            continue
+
+        try:
+            img_bytes = bucket.blob(storage_path).download_as_bytes()
+        except Exception:
+            continue
+
+        split = "val" if (n_docs >= 5 and idx % max(2, int(1 / val_ratio)) == 0) else "train"
+
+        with open(os.path.join(base_dir, "images", split, filename), "wb") as f:
+            f.write(img_bytes)
+
+        lines = []
+
+        for poly in d.get("polygons", []):
+            cid = get_class_id(poly.get("label", "object"))
+            norm_pts = _yolo_normalize_polygon(poly.get("points", []), img_w, img_h)
+            coords = " ".join(f"{x:.6f} {y:.6f}" for x, y in norm_pts)
+            lines.append(f"{cid} {coords}")
+
+        for box in d.get("bounding_boxes", []):
+            cid = get_class_id(box.get("label", "object"))
+            norm_pts = _yolo_normalize_bbox_as_polygon(box, img_w, img_h)
+            coords = " ".join(f"{x:.6f} {y:.6f}" for x, y in norm_pts)
+            lines.append(f"{cid} {coords}")
+
+        label_filename = os.path.splitext(filename)[0] + ".txt"
+        with open(os.path.join(base_dir, "labels", split, label_filename), "w") as f:
+            f.write("\n".join(lines))
+
+        total += 1
+
+    # กันเคส val ว่างเปล่า (ข้อมูลน้อยมาก) -> copy 1 ภาพจาก train มาเป็น val แทน
+    val_dir = os.path.join(base_dir, "images", "val")
+    if not os.listdir(val_dir):
+        train_dir = os.path.join(base_dir, "images", "train")
+        train_images = os.listdir(train_dir)
+        if train_images:
+            sample = train_images[0]
+            shutil.copy(os.path.join(train_dir, sample), os.path.join(val_dir, sample))
+            label_sample = os.path.splitext(sample)[0] + ".txt"
+            shutil.copy(
+                os.path.join(base_dir, "labels", "train", label_sample),
+                os.path.join(base_dir, "labels", "val", label_sample)
+            )
+
+    if total == 0:
+        raise ValueError("ไม่มีรูปภาพที่ข้อมูลครบสมบูรณ์พอจะใช้เทรนได้")
+
+    return class_names, total
+
+
+def run_det_seg_training(email, project):
+    key = f"{email}/{project}"
+    tmp_dir = tempfile.mkdtemp(prefix="yolo_train_")
+
+    try:
+        # import ตรงนี้ (ไม่ import ไว้บนสุดของไฟล์) เพื่อไม่ให้กระทบ startup time
+        # ของ service ถ้าไม่มีใครใช้ฟีเจอร์นี้เลย
+        from ultralytics import YOLO
+
+        class_names, total_images = _build_yolo_seg_dataset_on_disk(email, project, tmp_dir)
+
+        data_yaml_path = os.path.join(tmp_dir, "data.yaml")
+        with open(data_yaml_path, "w") as f:
+            f.write(
+                f"path: {tmp_dir}\n"
+                f"train: images/train\n"
+                f"val: images/val\n"
+                f"nc: {len(class_names)}\n"
+                f"names: {class_names}\n"
+            )
+
+        det_seg_training_status[key]["progress"] = 10
+        det_seg_training_status[key]["total_images"] = total_images
+
+        # 🌟 เทรนด้วย yolov8n-seg.pt เสมอ (superset ของ detection)
+        model = YOLO("yolov8n-seg.pt")
+
+        EPOCHS = 30  # โมเดล nano + epoch น้อย เพื่อให้พอไหวบน CPU (Cloud Run ไม่มี GPU)
+
+        def on_epoch_end(trainer):
+            epoch = trainer.epoch + 1
+            pct = 10 + int((epoch / EPOCHS) * 85)
+            det_seg_training_status[key]["progress"] = min(pct, 95)
+
+        model.add_callback("on_train_epoch_end", on_epoch_end)
+
+        model.train(
+            data=data_yaml_path,
+            epochs=EPOCHS,
+            imgsz=640,
+            project=tmp_dir,
+            name="run",
+            verbose=False
+        )
+
+        best_path = os.path.join(tmp_dir, "run", "weights", "best.pt")
+        if not os.path.exists(best_path):
+            raise RuntimeError("ไม่พบไฟล์ best.pt หลังเทรนเสร็จ")
+
+        model_storage_path = f"{email}/{project}/model_det_seg/best.pt"
+        bucket.blob(model_storage_path).upload_from_filename(best_path)
+
+        labels_path = f"{email}/{project}/model_det_seg/classes.json"
+        bucket.blob(labels_path).upload_from_string(
+            json.dumps(class_names), content_type="application/json"
+        )
+
+        det_seg_training_status[key] = {
+            "status": "done",
+            "progress": 100,
+            "classes": class_names,
+            "total_images": total_images
+        }
+
+    except Exception as e:
+        traceback.print_exc()
+        det_seg_training_status[key] = {"status": "error", "message": str(e)}
+
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+@app.route("/train_det_seg", methods=["POST", "OPTIONS"])
+def train_det_seg():
+    if request.method == "OPTIONS":
+        response = jsonify({"success": True})
+        response.headers.add("Access-Control-Allow-Origin", "*")
+        response.headers.add("Access-Control-Allow-Headers", "Content-Type,Authorization")
+        response.headers.add("Access-Control-Allow-Methods", "POST,OPTIONS")
+        return response, 200
+
+    data = request.get_json(silent=True) or {}
+    email = data.get("email")
+    project = data.get("project")
+    export_format = (data.get("format") or "yolo").strip().lower()
+
+    if not email or not project:
+        return jsonify({"success": False, "message": "Missing email or project"}), 400
+
+    if export_format != "yolo":
+        return jsonify({
+            "success": False,
+            "message": "รองรับการเทรนจริงเฉพาะฟอร์แมต YOLO เท่านั้น "
+                       "(เลือก COCO เพื่อ Export แล้วนำไปเทรนเองภายนอกแทน)"
+        }), 400
+
+    key = f"{email}/{project}"
+    det_seg_training_status[key] = {"status": "running", "progress": 0}
+
+    thread = threading.Thread(target=run_det_seg_training, args=(email, project))
+    thread.start()
+
+    resp = jsonify({"success": True, "message": "Training started"})
+    resp.headers.add("Access-Control-Allow-Origin", "*")
+    return resp
+
+
+@app.route("/train_det_seg_status", methods=["POST"])
+def train_det_seg_status():
+    data = request.get_json(silent=True) or {}
+    key = f"{data.get('email')}/{data.get('project')}"
+    resp = jsonify(det_seg_training_status.get(key, {"status": "idle"}))
+    resp.headers.add("Access-Control-Allow-Origin", "*")
+    return resp
+
+
+@app.route("/download_det_seg_model", methods=["POST"])
+def download_det_seg_model():
+    data = request.get_json(silent=True) or {}
+    email = data.get("email")
+    project = data.get("project")
+
+    if not email or not project:
+        return jsonify({"success": False, "message": "Invalid request"}), 400
+
+    model_path = f"{email}/{project}/model_det_seg/best.pt"
+    labels_path = f"{email}/{project}/model_det_seg/classes.json"
+
+    model_blob = bucket.blob(model_path)
+    if not model_blob.exists():
+        return jsonify({"success": False, "message": "Model not found, กรุณา train ก่อน"}), 404
+
+    zip_buffer = io.BytesIO()
+    with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("best.pt", model_blob.download_as_bytes())
+        labels_blob = bucket.blob(labels_path)
+        if labels_blob.exists():
+            zf.writestr("classes.json", labels_blob.download_as_bytes())
+
+    zip_buffer.seek(0)
+    return send_file(
+        zip_buffer,
+        mimetype="application/zip",
+        as_attachment=True,
+        download_name=f"{project}_yolov8_model.zip"
+    )
+
+
+# =========================================================
+# 🌐 EXPORT FOR EDGE (ONNX / TFLite / NCNN / TensorRT) — mixed annotation
+# ต่อยอดจาก best.pt ที่ train เสร็จแล้ว (model_det_seg/best.pt)
+# ใช้ ultralytics YOLO(...).export(format=...) ซึ่งกิน CPU/เวลาพอสมควร
+# จึงรันเป็น background thread + poll status เหมือน train_det_seg เดิม
+#
+# ⚠️ กรณีพิเศษ "engine" (TensorRT):
+#    TensorRT engine ต้อง build บน GPU สถาปัตยกรรมเดียวกับปลายทางจริงเท่านั้น
+#    (build ข้ามเครื่องไม่ได้) และ Cloud Run ไม่มี GPU เลย จึงทำได้แค่
+#    export เป็น ONNX ที่นี่ แล้วแนบสคริปต์ trtexec ให้ผู้ใช้ไป build
+#    .engine เองบนบอร์ด Jetson จริงตอนติดตั้งหน้างาน
+# =========================================================
+
+edge_export_status = {}   # key = f"{email}/{project}/{edge_format}"
+
+VALID_EDGE_FORMATS = ("onnx", "tflite", "ncnn", "engine")
+
+EDGE_FORMAT_MAP = {
+    "onnx": "onnx",
+    "tflite": "tflite",
+    "ncnn": "ncnn",
+}
+
+EDGE_FORMAT_IS_DIR = {
+    "onnx": False,
+    "tflite": True,
+    "ncnn": True,
+}
+
+
+def _build_trt_zip(zf, exported_onnx_path, project):
+    """
+    สร้างเนื้อหา zip สำหรับกรณี edge_format == "engine":
+    แนบ model.onnx + สคริปต์ build_engine.sh + README.txt
+    (ไม่ build .engine จริงที่นี่ เพราะ Cloud Run ไม่มี GPU)
+    """
+    zf.write(exported_onnx_path, "model.onnx")
+
+    build_script = f"""#!/bin/bash
+# ==========================================================
+# สคริปต์ build TensorRT engine จาก ONNX
+# ⚠️ ต้องรันบนบอร์ด Jetson จริง (Orin Nano/NX/AGX) ที่จะ deploy เท่านั้น
+#    ห้าม build บนเครื่องอื่นแล้วก๊อปปี้ .engine ไปใช้ข้ามบอร์ด
+#    ต้องติดตั้ง JetPack SDK (มี trtexec ติดมาให้อยู่แล้ว) ก่อนรัน
+# ==========================================================
+
+trtexec --onnx=model.onnx \\
+        --saveEngine=model.engine \\
+        --fp16 \\
+        --workspace=4096
+
+echo "✅ Build เสร็จแล้ว: model.engine"
+echo "นำไปใช้กับ project: {project}"
+"""
+    zf.writestr("build_engine.sh", build_script)
+
+    readme = """# วิธีใช้งาน
+
+1. คัดลอกไฟล์ model.onnx และ build_engine.sh ไปไว้บนบอร์ด Jetson ที่จะ deploy จริง
+2. รันคำสั่ง: chmod +x build_engine.sh && ./build_engine.sh
+3. จะได้ไฟล์ model.engine สำหรับใช้งานบนบอร์ดนั้นโดยเฉพาะ
+   (ห้ามนำ .engine ไปใช้ข้ามบอร์ดรุ่นอื่น ต้อง build ใหม่ทุกครั้งที่เปลี่ยนบอร์ด)
+"""
+    zf.writestr("README.txt", readme)
+
+
+def run_edge_export(email, project, edge_format):
+    key = f"{email}/{project}/{edge_format}"
+    tmp_dir = tempfile.mkdtemp(prefix="edge_export_")
+
+    try:
+        from ultralytics import YOLO
+
+        edge_export_status[key]["progress"] = 10
+
+        # ----------------------------------------------------
+        # 1) ดาวน์โหลด best.pt จาก Storage มาไว้ที่ tmp_dir ก่อน
+        # ----------------------------------------------------
+        model_storage_path = f"{email}/{project}/model_det_seg/best.pt"
+        model_blob = bucket.blob(model_storage_path)
+
+        if not model_blob.exists():
+            raise ValueError("ไม่พบ best.pt กรุณา train โมเดลให้เสร็จก่อน")
+
+        local_pt_path = os.path.join(tmp_dir, "best.pt")
+        model_blob.download_to_filename(local_pt_path)
+
+        edge_export_status[key]["progress"] = 30
+
+        # ----------------------------------------------------
+        # 2) โหลดโมเดลแล้วสั่ง export
+        #    - engine -> export เป็น onnx แทน (ดู comment ด้านบนไฟล์)
+        #    - อื่นๆ  -> export ตาม format จริง
+        # ----------------------------------------------------
+        model = YOLO(local_pt_path)
+
+        if edge_format == "engine":
+            export_kwargs = {"format": "onnx", "imgsz": 640}
+        else:
+            export_kwargs = {"format": EDGE_FORMAT_MAP[edge_format], "imgsz": 640}
+
+        exported_path = model.export(**export_kwargs)
+        # exported_path คือ path (str) ของไฟล์หรือโฟลเดอร์หลักที่ export ออกมา
+        # อยู่ข้างๆ best.pt ใน tmp_dir เดียวกัน
+
+        edge_export_status[key]["progress"] = 80
+
+        # ----------------------------------------------------
+        # 3) Zip ผลลัพธ์ทั้งหมด (ไฟล์เดี่ยว/โฟลเดอร์/ONNX+script) แล้วอัปโหลดขึ้น Storage
+        # ----------------------------------------------------
+        zip_local_path = os.path.join(tmp_dir, f"edge_{edge_format}.zip")
+
+        with zipfile.ZipFile(zip_local_path, "w", zipfile.ZIP_DEFLATED) as zf:
+            if edge_format == "engine":
+                _build_trt_zip(zf, exported_path, project)
+            elif EDGE_FORMAT_IS_DIR.get(edge_format) and os.path.isdir(exported_path):
+                for root, _, files in os.walk(exported_path):
+                    for fname in files:
+                        local_file = os.path.join(root, fname)
+                        arcname = os.path.relpath(local_file, tmp_dir)
+                        zf.write(local_file, arcname)
+            else:
+                zf.write(exported_path, os.path.basename(exported_path))
+
+            # แนบ classes.json เดิมไปด้วยทุก format เพราะฝั่ง edge ต้องใช้ mapping class เดียวกัน
+            labels_path = f"{email}/{project}/model_det_seg/classes.json"
+            labels_blob = bucket.blob(labels_path)
+            if labels_blob.exists():
+                zf.writestr("classes.json", labels_blob.download_as_bytes())
+
+        edge_storage_path = f"{email}/{project}/model_edge/{edge_format}.zip"
+        bucket.blob(edge_storage_path).upload_from_filename(zip_local_path)
+
+        edge_export_status[key] = {
+            "status": "done",
+            "progress": 100,
+            "format": edge_format
+        }
+
+    except Exception as e:
+        traceback.print_exc()
+        edge_export_status[key] = {"status": "error", "message": str(e)}
+
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+@app.route("/export_edge_format", methods=["POST", "OPTIONS"])
+def export_edge_format():
+    if request.method == "OPTIONS":
+        response = jsonify({"success": True})
+        response.headers.add("Access-Control-Allow-Origin", "*")
+        response.headers.add("Access-Control-Allow-Headers", "Content-Type,Authorization")
+        response.headers.add("Access-Control-Allow-Methods", "POST,OPTIONS")
+        return response, 200
+
+    data = request.get_json(silent=True) or {}
+    email = data.get("email")
+    project = data.get("project")
+    edge_format = (data.get("edgeFormat") or "onnx").strip().lower()
+
+    if not email or not project:
+        return jsonify({"success": False, "message": "Missing email or project"}), 400
+
+    if edge_format not in VALID_EDGE_FORMATS:
+        return jsonify({
+            "success": False,
+            "message": f"edgeFormat must be one of {VALID_EDGE_FORMATS}"
+        }), 400
+
+    # เช็คว่ามี best.pt อยู่จริงก่อนเริ่ม thread (ตอบ error ทันที ไม่ต้องรอ poll)
+    model_storage_path = f"{email}/{project}/model_det_seg/best.pt"
+    if not bucket.blob(model_storage_path).exists():
+        return jsonify({
+            "success": False,
+            "message": "ไม่พบโมเดลที่ train แล้ว กรุณา train ให้เสร็จก่อน"
+        }), 404
+
+    key = f"{email}/{project}/{edge_format}"
+    edge_export_status[key] = {"status": "running", "progress": 0}
+
+    thread = threading.Thread(
+        target=run_edge_export,
+        args=(email, project, edge_format)
+    )
+    thread.start()
+
+    resp = jsonify({"success": True, "message": "Edge export started"})
+    resp.headers.add("Access-Control-Allow-Origin", "*")
+    return resp
+
+
+@app.route("/export_edge_status", methods=["POST"])
+def export_edge_status():
+    data = request.get_json(silent=True) or {}
+    email = data.get("email")
+    project = data.get("project")
+    edge_format = (data.get("edgeFormat") or "onnx").strip().lower()
+
+    key = f"{email}/{project}/{edge_format}"
+    resp = jsonify(edge_export_status.get(key, {"status": "idle"}))
+    resp.headers.add("Access-Control-Allow-Origin", "*")
+    return resp
+
+
+@app.route("/download_edge_model", methods=["POST"])
+def download_edge_model():
+    data = request.get_json(silent=True) or {}
+    email = data.get("email")
+    project = data.get("project")
+    edge_format = (data.get("edgeFormat") or "onnx").strip().lower()
+
+    if not email or not project or edge_format not in VALID_EDGE_FORMATS:
+        return jsonify({"success": False, "message": "Invalid request"}), 400
+
+    edge_storage_path = f"{email}/{project}/model_edge/{edge_format}.zip"
+    blob = bucket.blob(edge_storage_path)
+
+    if not blob.exists():
+        return jsonify({
+            "success": False,
+            "message": "ยังไม่มีไฟล์ export กรุณา export ก่อน"
+        }), 404
+
+    return send_file(
+        io.BytesIO(blob.download_as_bytes()),
+        mimetype="application/zip",
+        as_attachment=True,
+        download_name=f"{project}_{edge_format}.zip"
+    )
+
+
+# =========================================================
+# 🌟 V2: /api/upload_dataset_v2
+# รองรับ Mixed Annotation: ภาพเดียวกันมีทั้ง bounding_boxes และ polygons
+# พร้อมกันได้ (เลือกโหมดวาดต่อวัตถุจากฝั่ง React) ไม่ผูกกับ project_type
+# แบบเดิมอีกต่อไป
+#
+# บันทึกที่: user/{email}/project/{project}/images/{doc_id}
+# Storage  : {email}/{project}/{filename}
+# =========================================================
+@app.route("/api/upload_dataset_v2", methods=["POST", "OPTIONS"])
+def upload_dataset_v2():
     if request.method == "OPTIONS":
         response = jsonify({"success": True})
         response.headers.add("Access-Control-Allow-Origin", "*")
@@ -4061,35 +3732,27 @@ def upload_dataset():
 
         email = data.get("email")
         project = data.get("project_name")
-        class_name = data.get("class_name")
         aug_mode = data.get("aug_mode", "original")
         image_data = data.get("image_data")  # Base64 string
         canvas_width = data.get("canvas_width")
         canvas_height = data.get("canvas_height")
 
-        # 🌟 ประเภทงาน: "detection" (default) หรือ "segmentation"
-        # ใช้เลือก Firestore collection + Storage folder + รูปแบบ annotation ที่จะประมวลผล
-        project_type = (data.get("project_type") or "detection").strip().lower()
-        type_config = PROJECT_TYPE_CONFIG.get(project_type, PROJECT_TYPE_CONFIG["detection"])
-        collection_name = type_config["collection"]
-        storage_folder = type_config["storage_folder"]
-        is_segmentation = project_type == "segmentation"
+        # 🌟 Mixed annotation: รับมาพร้อมกันได้ทั้งคู่ ไม่ต้องเลือกอย่างใดอย่างหนึ่ง
+        raw_boxes = data.get("bounding_boxes", []) or []
+        raw_polygons = data.get("polygons", []) or []
 
-        if not all([email, project, class_name, image_data]):
+        if not all([email, project, image_data]):
             return _cors(jsonify({
-                "error": "Missing required fields (email, project_name, class_name, image_data)"
+                "error": "Missing required fields (email, project_name, image_data)"
             })), 400
 
-        # ✅ ตรวจสอบข้อมูล annotation ตามประเภทงาน
-        if is_segmentation:
-            raw_polygons = data.get("polygons", [])
-            if not raw_polygons:
-                return _cors(jsonify({"error": "Missing polygons data for segmentation"})), 400
-        else:
-            raw_boxes = data.get("bounding_boxes", [])
+        if not raw_boxes and not raw_polygons:
+            return _cors(jsonify({
+                "error": "ต้องมี bounding_boxes หรือ polygons อย่างน้อย 1 รายการ"
+            })), 400
 
-        # -------------------------------------------------- 
-        # 1. Decode base64 -> PIL Image (แปลงเป็น RGB เผื่อ PNG มี alpha channel)
+        # ---------------------------------------------------------
+        # 1. Decode base64 -> PIL Image
         # ---------------------------------------------------------
         if "," in image_data:
             _, base64_str = image_data.split(",", 1)
@@ -4101,39 +3764,39 @@ def upload_dataset():
         img_w, img_h = pil_img.size
 
         # ---------------------------------------------------------
-        # 2. Normalize พิกัด annotation จาก container space -> image pixel space
-        #    (แก้ปัญหา letterboxing จาก object-fit: contain)
+        # 2. Normalize พิกัดจาก container space (letterbox) -> image pixel space
+        #    ทำแยกกันทั้ง boxes และ polygons เพราะเป็นคนละ helper กัน
         # ---------------------------------------------------------
-        if is_segmentation:
-            normalized_polygons = normalize_polygons_to_image_space(
-                raw_polygons, canvas_width, canvas_height, img_w, img_h
-            )
-        else:
-            normalized_boxes = normalize_boxes_to_image_space(
-                raw_boxes, canvas_width, canvas_height, img_w, img_h
-            )
+        normalized_boxes = (
+            normalize_boxes_to_image_space(raw_boxes, canvas_width, canvas_height, img_w, img_h)
+            if raw_boxes else []
+        )
+        normalized_polygons = (
+            normalize_polygons_to_image_space(raw_polygons, canvas_width, canvas_height, img_w, img_h)
+            if raw_polygons else []
+        )
 
         # ---------------------------------------------------------
-        # 3. ถ้าเป็นโหมด geometric ให้แปลงภาพจริง + คำนวณ annotation ใหม่ตามภาพ
-        #    ถ้าเป็นโหมด pixel-level ฝั่ง React แปลงภาพมาก่อนส่งแล้ว ข้ามขั้นตอนนี้
+        # 3. โหมด geometric ต้องแปลงภาพจริง + คำนวณ annotation ใหม่ตามภาพเดียวกัน
+        #    ⚠️ ต้องแปลงภาพแค่ "ครั้งเดียว" ไม่งั้น boxes กับ polygons จะอิงคนละภาพกัน
         # ---------------------------------------------------------
         if aug_mode in GEOMETRIC_MODES:
-            if is_segmentation:
-                # ใช้ apply_geometric_augmentation แปลงตัวภาพเฉยๆ (ไม่สนใจ boxes ที่คืนมา)
-                pil_img, _ = apply_geometric_augmentation(pil_img, aug_mode, [])
-                final_polygons = apply_geometric_augmentation_to_polygons(
-                    aug_mode, normalized_polygons, img_w, img_h
-                )
-            else:
+            if normalized_boxes:
                 pil_img, final_boxes = apply_geometric_augmentation(pil_img, aug_mode, normalized_boxes)
-        else:
-            if is_segmentation:
-                final_polygons = normalized_polygons
             else:
-                final_boxes = normalized_boxes
+                pil_img, _ = apply_geometric_augmentation(pil_img, aug_mode, [])
+                final_boxes = []
+
+            final_polygons = (
+                apply_geometric_augmentation_to_polygons(aug_mode, normalized_polygons, img_w, img_h)
+                if normalized_polygons else []
+            )
+        else:
+            final_boxes = normalized_boxes
+            final_polygons = normalized_polygons
 
         # ---------------------------------------------------------
-        # 4. Encode ภาพที่ได้ (ต้นฉบับ หรือแปลงแล้ว) กลับเป็น JPEG bytes
+        # 4. Encode ภาพที่ได้กลับเป็น JPEG bytes
         # ---------------------------------------------------------
         out_buffer = io.BytesIO()
         pil_img.save(out_buffer, format="JPEG", quality=92)
@@ -4141,12 +3804,11 @@ def upload_dataset():
 
         # ---------------------------------------------------------
         # 5. อัปโหลดขึ้น Firebase Storage
-        #    path: /{email}/{storage_folder}/{project}/{filename}
-        #    - detection    -> {email}/Detection/{project}/...
-        #    - segmentation -> {email}/Segment/{project}/...
+        #    path: /{email}/{project}/{filename}
+        #    (ไม่แยกโฟลเดอร์ Detection/Segment อีกต่อไป เพราะเป็น mixed annotation)
         # ---------------------------------------------------------
         filename = f"{int(time.time())}_{uuid.uuid4().hex[:8]}.jpg"
-        storage_path = f"{email}/{storage_folder}/{project}/{filename}"
+        storage_path = f"{email}/{project}/{filename}"
 
         blob = bucket.blob(storage_path)
         blob.upload_from_string(image_bytes_out, content_type="image/jpeg")
@@ -4154,20 +3816,17 @@ def upload_dataset():
         image_url = blob.public_url
 
         # ---------------------------------------------------------
-        # 6. บันทึกข้อมูลลง Firestore
-        #    - detection    -> /user/{email}/detection/{project}/images/{doc_id}
-        #    - segmentation -> /user/{email}/Segment/{project}/images/{doc_id}
+        # 6. บันทึกลง Firestore: user/{email}/project/{project}/images/{doc_id}
         # ---------------------------------------------------------
         doc_id = filename.split(".")[0]
 
-        doc_ref = worker_db.collection("user").document(email) \
-                           .collection(collection_name).document(project) \
-                           .collection("images").document(doc_id)
+        doc_ref = (
+            worker_db.collection("user").document(email)
+            .collection("project").document(project)
+            .collection("images").document(doc_id)
+        )
 
-        firestore_payload = {
-            "class_name": class_name,
-            "project_type": project_type,
-            "annotation_type": "polygon" if is_segmentation else "bbox",
+        doc_ref.set({
             "image_filename": filename,
             "storage_path": storage_path,
             "image_url": image_url,
@@ -4176,109 +3835,343 @@ def upload_dataset():
             "image_height": img_h,
             "canvas_width_at_capture": canvas_width,
             "canvas_height_at_capture": canvas_height,
+            "bounding_boxes": final_boxes,
+            "polygons": final_polygons,
             "timestamp": datetime.utcnow(),
-        }
-
-        if is_segmentation:
-            firestore_payload["polygons"] = final_polygons
-        else:
-            firestore_payload["bounding_boxes"] = final_boxes
-
-        doc_ref.set(firestore_payload)
+        })
 
         # ---------------------------------------------------------
-        # 7. อัปเดตสรุปยอดรวมของ project
-        #    - detection    -> /user/{email}/detection/{project}
-        #    - segmentation -> /user/{email}/Segment/{project}
-        #    เพื่อให้ endpoint อื่น (เช่น /get_detection_projects, /get_segmentation_projects)
-        #    อ่าน total_images ถูกต้อง
+        # 7. อัปเดตสรุปยอดรวมของ project: user/{email}/project/{project}
         # ---------------------------------------------------------
-        project_summary_ref = worker_db.collection("user").document(email) \
-                                        .collection(collection_name).document(project)
-        project_summary_ref.set({
+        project_ref = (
+            worker_db.collection("user").document(email)
+            .collection("project").document(project)
+        )
+        project_ref.set({
             "project": project,
             "total_images": firestore.Increment(1),
             "updated_at": firestore.SERVER_TIMESTAMP,
         }, merge=True)
 
-        response_payload = {
+        return _cors(jsonify({
             "success": True,
             "message": "Dataset saved successfully",
-            "project_type": project_type,
             "storage_path": storage_path,
             "image_url": image_url,
-        }
-        if is_segmentation:
-            response_payload["polygons"] = final_polygons
-        else:
-            response_payload["bounding_boxes"] = final_boxes
-
-        return _cors(jsonify(response_payload)), 200
+            "bounding_boxes": final_boxes,
+            "polygons": final_polygons,
+        })), 200
 
     except Exception as e:
-        import traceback
-        print(traceback.format_exc())
+        traceback.print_exc()
         return _cors(jsonify({"error": str(e)})), 500
-# =========================================================
-# UPDATE PROJECT TYPE (เพิ่มใหม่เพื่อให้ React เรียกใช้ได้)
-# =========================================================
-@app.route("/update_project_type", methods=["POST", "OPTIONS"])
-def update_project_type():
-    # จัดการกรณี Preflight request จากบราวเซอร์ (CORS OPTIONS)
-    if request.method == "OPTIONS":
-        return jsonify({"success": True}), 200
 
+
+# =========================================================
+# DELETE PROJECT
+# ลบทั้งโปรเจกต์:
+#   1) Storage   : ลบไฟล์ทุกไฟล์ใต้ path  {email}/{project}/...
+#   2) Firestore : ลบ document ที่ path
+#                  user/{email}/project/{project}
+# =========================================================
+@app.route("/delete_project", methods=["POST"])
+def delete_project():
     try:
-        data = request.get_json(silent=True) or {}
-        
-        email = data.get("email", "").lower().strip()
-        project_name = data.get("project", "").strip()
-        project_type = data.get("projectType", "").strip() # รับค่าประเภท เช่น 'Premium', 'Standard'
+        data = request.get_json(force=True) or {}
 
-        # 1. Validation เช็คความถูกต้องของข้อมูล
-        if not email or not project_name or not project_type:
+        email = data.get("email")
+        project = data.get("project")
+
+        if not email or not project:
             return jsonify({
-                "success": False,
-                "message": "Missing email, project, or projectType"
+                "status": "error",
+                "message": "Missing email or project"
             }), 400
 
-        # 2. ค้นหาเอกสารอ้างอิงโปรเจกต์ในคอลเลกชัน dataset_session
-        project_ref = (
+        # ---------------------------------------------------
+        # 1) ลบไฟล์ทั้งหมดใน Storage ใต้ path {email}/{project}/
+        # ---------------------------------------------------
+        prefix = f"{email}/{project}/"
+
+        blobs = list(bucket.list_blobs(prefix=prefix))
+
+        for blob in blobs:
+            blob.delete()
+
+        # ---------------------------------------------------
+        # 2) ลบ Firestore document:
+        #    user/{email}/project/{project}
+        # ---------------------------------------------------
+        doc_ref = (
             worker_db
             .collection("user")
             .document(email)
-            .collection("dataset_session")
-            .document(project_name)
+            .collection("project")
+            .document(project)
         )
 
-        # ตรวจสอบว่ามีโปรเจกต์นี้อยู่จริงไหม
-        if not project_ref.get().exists:
-            return jsonify({
-                "success": False,
-                "message": f"Project '{project_name}' not found."
-            }), 404
-
-        # 3. อัปเดตข้อมูลประเภทโปรเจกต์เข้าไปใน Firestore
-        project_ref.update({
-            "projectType": project_type,
-            "updated_at": firestore.SERVER_TIMESTAMP
-        })
-
-        print(f"✅ Project '{project_name}' of {email} updated to {project_type}")
+        doc_ref.delete()
 
         return jsonify({
-            "success": True,
-            "message": "Project type updated successfully",
-            "project": project_name,
-            "projectType": project_type
+            "status": "ok",
+            "deleted_files": len(blobs)
+        })
+
+    except Exception as e:
+        traceback.print_exc()
+
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
+#===========================================================
+@app.route("/list_servers", methods=["GET"])
+@require_admin_key
+def list_servers():
+    try:
+        servers = []
+
+        docs = (
+            hub_db.collection("hub_system")
+            .document("server_pool")
+            .collection("servers")
+            .stream()
+        )
+
+        now = int(time.time())
+
+        for doc in docs:
+            data = doc.to_dict() or {}
+            last_heartbeat = data.get("last_heartbeat", 0)
+
+            # ไม่มี heartbeat เข้ามาเกิน 90 วิ ถือว่า offline
+            is_online = (now - last_heartbeat) <= 90
+
+            servers.append({
+                "server_id": doc.id,
+                "cloud_url": data.get("cloud_url", ""),
+                "status": "online" if is_online else "offline",
+                "active_users": data.get("active_users", 0),
+                "load_score": data.get("load_score", 0),
+                "last_heartbeat": last_heartbeat
+            })
+
+        servers.sort(key=lambda s: s["server_id"])
+
+        return jsonify({
+            "status": "success",
+            "servers": servers
         })
 
     except Exception as e:
         traceback.print_exc()
         return jsonify({
-            "success": False,
+            "status": "error",
             "message": str(e)
-        }), 500 
+        }), 500
+ #=======================================  
+# =========================================================
+# ENDPOINT: รับแจ้งชำระเงิน และบันทึกลง FIREBASE (UPDATE TYPE)
+# =========================================================
+@app.route("/api/payment/confirm", methods=["POST"])
+def confirm_payment():
+    try:
+        # 1. ดึงข้อมูล Text จาก FormData
+        email = request.form.get("email")
+        amount = request.form.get("amount")
+        bank = request.form.get("bank")
+        transfer_time = request.form.get("transfer_time")
+
+        # ตรวจสอบค่าห้ามว่าง
+        if not email or not amount or not bank or not transfer_time:
+            return jsonify({"error": "Missing required text fields"}), 400
+
+        # 2. ดึงไฟล์รูปภาพสลิป
+        if "slip" not in request.files:
+            return jsonify({"error": "Missing slip image file"}), 400
+        
+        file = request.files["slip"]
+        if not file or file.filename == "":
+            return jsonify({"error": "No file selected"}), 400
+
+        # ป้องกัน Pylance แจ้งเตือนเรื่อง Type "str | None"
+        filename = file.filename if file.filename is not None else "slip.jpg"
+        file_ext = os.path.splitext(filename)[1] or ".jpg"
+        unique_filename = f"{uuid.uuid4()}{file_ext}"
+
+        # 3. อัปโหลดรูปสลิปขึ้น Firebase Storage (worker_app)
+        # ปลายทาง path -> /{email}/"payment"/{filename}
+        storage_path = f"{email}/payment/{unique_filename}"
+        blob = bucket.blob(storage_path)
+        
+        # อ่านไฟล์และกำหนด Content-Type แบบปลอดภัยจาก None
+        file_stream = file.read()
+        content_type = file.content_type if file.content_type is not None else "image/jpeg"
+        
+        blob.upload_from_string(file_stream, content_type=content_type)
+        
+        # ทำการสิทธิ์เปิดดูรูปภาพผ่านลิงก์สาธารณะ
+        blob.make_public()
+        slip_url = blob.public_url
+
+        # 4. บันทึกข้อมูลอื่นๆ ลง Firestore (worker_db)
+        # ปลายทาง path -> /user/{email}/"payment"/"data"/records/{random_id}
+        payment_data = {
+            "amount": float(amount),
+            "bank": bank,
+            "transfer_time": transfer_time,
+            "slip_url": slip_url,
+            "storage_path": storage_path,
+            "created_at": firestore.SERVER_TIMESTAMP,
+            "status": "pending"  # ตั้งสถานะเริ่มต้นรอการตรวจสอบ
+        }
+       #doc_ref = worker_db.collection("user").document(email).collection("payment").document("data").collection("records").document()
+        doc_ref = worker_db.collection("user").document(email).collection("payment").document()
+        doc_ref.set(payment_data)
+
+        return jsonify({
+            "message": "Payment confirmation submitted successfully",
+            "doc_id": doc_ref.id,
+            "slip_url": slip_url
+        }), 200
+
+    except Exception as e:
+        print("--- PAYMENT SUBMIT ERROR ---")
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500     
+# =========================================================
+# LIST CLASS IMAGES
+#   Storage path: {email}/{project}/class/{className}/...
+#   ส่งกลับรูปแบบ pagination รอบละ `limit` รูป (default 50)
+# =========================================================
+@app.route("/list_class_images", methods=["POST"])
+def list_class_images():
+    try:
+        data = request.get_json(force=True) or {}
+
+        email = data.get("email")
+        project = data.get("project")
+        class_name = data.get("className")
+        offset = int(data.get("offset", 0))
+        limit = int(data.get("limit", 50))
+
+        if not email or not project or not class_name:
+            return jsonify({
+                "status": "error",
+                "message": "Missing email, project or className"
+            }), 400
+
+        prefix = f"{email}/{project}/class/{class_name}/"
+
+        all_blobs = list(bucket.list_blobs(prefix=prefix))
+        all_blobs.sort(key=lambda b: b.name)
+
+        page_blobs = all_blobs[offset: offset + limit]
+
+        images = []
+
+        for blob in page_blobs:
+            file_name = blob.name.split("/")[-1]
+
+            # signed url ใช้แสดงรูปได้ชั่วคราว (2 ชม.) โดยไม่ต้องเปิด public bucket
+            url = blob.generate_signed_url(
+                expiration=timedelta(hours=2)
+            )
+
+            images.append({
+                "name": file_name,
+                "url": url
+            })
+
+        has_more = (offset + limit) < len(all_blobs)
+
+        return jsonify({
+            "status": "ok",
+            "images": images,
+            "total": len(all_blobs),
+            "hasMore": has_more
+        })
+
+    except Exception as e:
+        traceback.print_exc()
+
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
+
+
+# =========================================================
+# DELETE SINGLE IMAGE
+#   Storage  : {email}/{project}/class/{className}/{fileName}
+#   Firestore: {email}/{project}/class/{className}
+#              (ลด total_images -1 และตัดชื่อไฟล์ออกจาก
+#               field "images" ถ้ามีการเก็บ array ไว้)
+# =========================================================
+@app.route("/delete_image", methods=["POST"])
+def delete_image():
+    try:
+        data = request.get_json(force=True) or {}
+
+        email = data.get("email")
+        project = data.get("project")
+        class_name = data.get("className")
+        file_name = data.get("fileName")
+
+        if not email or not project or not class_name or not file_name:
+            return jsonify({
+                "status": "error",
+                "message": "Missing email, project, className or fileName"
+            }), 400
+
+        # ---------------------------------------------------
+        # 1) ลบไฟล์รูปจาก Storage
+        # ---------------------------------------------------
+        blob_path = f"{email}/{project}/class/{class_name}/{file_name}"
+        blob = bucket.blob(blob_path)
+
+        if blob.exists():
+            blob.delete()
+
+        # ---------------------------------------------------
+        # 2) อัปเดต Firestore document ของ class นี้
+        #    path: {email}/{project}/class/{className}
+        #    (ไม่ให้ error ตรงนี้ทำให้ทั้ง request fail
+        #     เพราะไฟล์ถูกลบออกจาก Storage สำเร็จไปแล้ว)
+        # ---------------------------------------------------
+        try:
+            class_ref = (
+                worker_db
+                .collection("user")
+                .document(email)
+                .collection("dataset_session")
+                .document(project)
+                .collection("class")
+                .document(class_name)
+            )
+
+            # ลบ document รูปนี้ออกจาก subcollection images (สมมติ doc id = fileName)
+            class_ref.collection("images").document(file_name).delete()
+
+            # ลด total_images บน class doc เอง (ถ้ามี field นี้เก็บอยู่)
+            class_ref.update({
+                "total_images": firestore.Increment(-1)
+            })
+
+        except Exception:
+            traceback.print_exc()
+
+        return jsonify({
+            "status": "ok"
+        })
+
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500  
+ 
 # =========================================================
 # RUN
 # ======================================================
