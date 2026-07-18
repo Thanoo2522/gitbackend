@@ -826,13 +826,9 @@ def admin_login():
         "status": "success"
     })  
 
-# =========================================================
-# GET PROJECTS (ใช้โดย Project.jsx - loadProjects())
-# 3 route นี้ต้องมีอยู่เสมอ ไม่งั้น Project.jsx จะโหลดข้อมูลไม่ได้เลย
-# ทั้ง 3 แท็บ (Classification / Detection / Segmentation)
-# =========================================================
-@app.route("/get_classification_projects", methods=["POST", "OPTIONS"])
-def get_classification_projects():
+# อ่าน PROJECT  
+@app.route("/get_projects_v2", methods=["POST", "OPTIONS"])
+def get_projects_v2():
     if request.method == "OPTIONS":
         response = jsonify({"success": True})
         response.headers.add("Access-Control-Allow-Origin", "*")
@@ -841,235 +837,93 @@ def get_classification_projects():
         return response, 200
 
     try:
-        body = request.get_json(silent=True) or {}
-        email = body.get("email")
-        if not email:
-            return jsonify({"success": False, "message": "Missing email"}), 400
+        data = request.get_json(silent=True) or {}
+        email = data.get("email")
 
-        class_projects = {}
-
-        # ดึงผ่าน collection_group เพื่อความแม่นยำและทะลุผ่าน Virtual Document
-        class_groups = worker_db.collection_group("class").stream()
-
-        for doc in class_groups:
-            path_str = doc.reference.path
-            # กรองเฉพาะของอีเมลนี้ และต้องไม่อยู่ในกลุ่ม detection/segmentation
-            if f"user/{email}/dataset_session" in path_str and "detection" not in path_str and "segmentation" not in path_str:
-                parts = path_str.split("/")
-                if "dataset_session" in parts:
-                    idx = parts.index("dataset_session")
-                    project_name = parts[idx + 1]
-
-                    cls_data = doc.to_dict()
-                    img_count = cls_data.get("total_images", 0)
-                    r_width = cls_data.get("resize_width", 224)
-                    r_height = cls_data.get("resize_height", 224)
-
-                    if project_name not in class_projects:
-                        class_projects[project_name] = {
-                            "project": project_name,
-                            "project_type": "classification",
-                            "resize_width": r_width,
-                            "resize_height": r_height,
-                            "classes": [],
-                            "total_images": 0
-                        }
-
-                    class_projects[project_name]["classes"].append({
-                        "project": project_name,
-                        "label": doc.id,
-                        "total_images": img_count
-                    })
-                    class_projects[project_name]["total_images"] += img_count
-
-        resp = jsonify({"success": True, "data": list(class_projects.values())})
-        resp.headers.add("Access-Control-Allow-Origin", "*")
-        return resp, 200
-    except Exception as e:
-        return jsonify({"success": False, "error": str(e), "data": []}), 500
-
-
-# ==========================================================
-# 🎯 Route สำหรับ Object Detection
-# พาธบันทึก: user/{email}/detection/{project_name}
-# (ตรงกับ collection "detection" ที่ /api/upload_dataset เขียนจริง)
-# ==========================================================
-@app.route("/get_detection_projects", methods=["POST", "OPTIONS"])
-def get_detection_projects():
-    if request.method == "OPTIONS":
-        response = jsonify({"success": True})
-        response.headers.add("Access-Control-Allow-Origin", "*")
-        response.headers.add("Access-Control-Allow-Headers", "Content-Type,Authorization")
-        response.headers.add("Access-Control-Allow-Methods", "POST,OPTIONS")
-        return response, 200
-
-    try:
-        body = request.get_json(silent=True) or {}
-        email = body.get("email")
         if not email:
             return jsonify({"success": False, "message": "Missing email"}), 400
 
         projects_list = []
 
-        # ✅ อ่านตรงจาก user/{email}/detection/{project}
-        detection_docs = (
+        docs = (
             worker_db.collection("user").document(email)
-            .collection("detection").stream()
+            .collection("project").stream()
         )
 
-        for doc in detection_docs:
-            data = doc.to_dict() or {}
+        for doc in docs:
+            d = doc.to_dict() or {}
             projects_list.append({
-                "project": doc.id,
-                "project_type": "detection",
-                "resize_width": data.get("resize_width", 640),
-                "resize_height": data.get("resize_height", 640),
-                "total_images": data.get("total_images", 0),
-                "classes": []
+                "project": d.get("project", doc.id),
+                "total_images": d.get("total_images", 0),
+                "created_at": str(d.get("created_at", "")),
+                "updated_at": str(d.get("updated_at", "")),
             })
 
         resp = jsonify({"success": True, "data": projects_list})
         resp.headers.add("Access-Control-Allow-Origin", "*")
         return resp, 200
-    except Exception as e:
-        return jsonify({"success": False, "error": str(e), "data": []}), 500
-
-
-# ==========================================================
-# ⬡ Route สำหรับ Segmentation
-# พาธบันทึก: user/{email}/Segment/{project_name}
-# ⚠️ ต้องใช้ collection "Segment" (S ใหญ่) ให้ตรงกับที่ /api/upload_dataset
-#    และ /create_project เขียนจริง ไม่ใช่ "segmentation"
-# ==========================================================
-@app.route("/get_segmentation_projects", methods=["POST", "OPTIONS"])
-def get_segmentation_projects():
-    if request.method == "OPTIONS":
-        response = jsonify({"success": True})
-        response.headers.add("Access-Control-Allow-Origin", "*")
-        response.headers.add("Access-Control-Allow-Headers", "Content-Type,Authorization")
-        response.headers.add("Access-Control-Allow-Methods", "POST,OPTIONS")
-        return response, 200
-
-    try:
-        body = request.get_json(silent=True) or {}
-        email = body.get("email")
-        if not email:
-            return jsonify({"success": False, "message": "Missing email"}), 400
-
-        projects_list = []
-
-        # ✅ อ่านตรงจาก user/{email}/Segment/{project}
-        segmentation_docs = (
-            worker_db.collection("user").document(email)
-            .collection("Segment").stream()
-        )
-
-        for doc in segmentation_docs:
-            data = doc.to_dict() or {}
-            projects_list.append({
-                "project": doc.id,
-                "project_type": "segmentation",
-                "resize_width": data.get("resize_width", 640),
-                "resize_height": data.get("resize_height", 640),
-                "total_images": data.get("total_images", 0),
-                "classes": []
-            })
-
-        resp = jsonify({"success": True, "data": projects_list})
-        resp.headers.add("Access-Control-Allow-Origin", "*")
-        return resp, 200
-    except Exception as e:
-        return jsonify({"success": False, "error": str(e), "data": []}), 500
-
-
- # =========================================================
-# CREATE PROJECT
-# =========================================================
- 
-
-# สมมติการตั้งค่า Firestore ตัวแปรหลักของคุณ (ปรับชื่อตามจริงของคุณ)
-# db = firestore.client()
-
-@app.route("/create_project", methods=["POST", "OPTIONS"])
-def create_project():
-    # จัดการ Preflight Request สำหรับ CORS
-    if request.method == "OPTIONS":
-        response = jsonify({"success": True})
-        response.headers.add("Access-Control-Allow-Origin", "*")
-        response.headers.add("Access-Control-Allow-Headers", "Content-Type,Authorization")
-        response.headers.add("Access-Control-Allow-Methods", "POST,OPTIONS")
-        return response, 200
-
-    try:
-        body = request.get_json(silent=True) or {}
-        email = body.get("email")
-        project_name = body.get("project")
-        project_type = body.get("projectType", "classification")
-
-        if not email or not project_name:
-            resp = jsonify({"success": False, "message": "Missing email or project name"})
-            resp.headers.add("Access-Control-Allow-Origin", "*")
-            return resp, 400
-
-        if project_type == "classification":
-            class_name = body.get("className")
-            width = body.get("resize_width", 224)
-            height = body.get("resize_height", 224)
-
-            if not class_name:
-                resp = jsonify({"success": False, "message": "Missing class name for classification"})
-                resp.headers.add("Access-Control-Allow-Origin", "*")
-                return resp, 400
-
-            # พาธดั้งเดิมของ Classification: /user/{email}/dataset_session/{Project}/class/{Class}
-            doc_ref = worker_db.collection("user").document(email)\
-                        .collection("dataset_session").document(project_name)\
-                        .collection("class").document(class_name)
-
-            doc_ref.set({
-                "label": class_name,
-                "total_images": 0,
-                "project_type": project_type,
-                "projectType": project_type,
-                "resize_width": width,
-                "resize_height": height
-            }, merge=True)
-
-        else:
-            # 🚀 สำหรับโหมด "detection" หรือ "segmentation"
-            # ✅ แก้ให้ตรงกับ path จริงที่ /api/upload_dataset เขียน:
-            #    user/{email}/detection/{project}
-            #    user/{email}/Segment/{project}
-            # (ใช้ PROJECT_TYPE_CONFIG mapping เดียวกับ /api/upload_dataset
-            #  เพื่อไม่ให้ชื่อ collection เพี้ยนกันระหว่าง 2 endpoint นี้)
-            width = body.get("resize_width", 640)
-            height = body.get("resize_height", 640)
-
-            type_config = PROJECT_TYPE_CONFIG.get(project_type, PROJECT_TYPE_CONFIG["detection"])
-            collection_name = type_config["collection"]  # "detection" | "Segment"
-
-            doc_ref = worker_db.collection("user").document(email) \
-                        .collection(collection_name).document(project_name)
-
-            doc_ref.set({
-                "project": project_name,
-                "project_type": project_type,
-                "projectType": project_type,
-                "total_images": 0,
-                "resize_width": width,
-                "resize_height": height,
-                "created_at": firestore.SERVER_TIMESTAMP
-            }, merge=True)
-
-        resp_success = jsonify({"success": True, "message": "Project created successfully"})
-        resp_success.headers.add("Access-Control-Allow-Origin", "*")
-        return resp_success, 200
 
     except Exception as e:
         traceback.print_exc()
-        resp_err = jsonify({"success": False, "error": str(e)})
-        resp_err.headers.add("Access-Control-Allow-Origin", "*")
-        return resp_err, 500
+        return jsonify({"success": False, "error": str(e), "data": []}), 500
+  # =========================================================
+# CREATE PROJECT
+# =========================================================
+@app.route("/create_project_v2", methods=["POST", "OPTIONS"])
+def create_project_v2():
+    if request.method == "OPTIONS":
+        response = jsonify({"success": True})
+        response.headers.add("Access-Control-Allow-Origin", "*")
+        response.headers.add("Access-Control-Allow-Headers", "Content-Type,Authorization")
+        response.headers.add("Access-Control-Allow-Methods", "POST,OPTIONS")
+        return response, 200
+
+    try:
+        data = request.get_json(silent=True) or {}
+
+        email = (data.get("email") or "").lower().strip()
+        project_name = (data.get("project") or "").strip()
+
+        if not email:
+            return _cors(jsonify({"success": False, "message": "Missing email"})), 400
+
+        if not project_name:
+            return _cors(jsonify({"success": False, "message": "Please enter Project Name"})), 400
+
+        project_ref = (
+            worker_db
+            .collection("user")
+            .document(email)
+            .collection("project")
+            .document(project_name)
+        )
+
+        if project_ref.get().exists:
+            return _cors(jsonify({
+                "success": False,
+                "message": f"Project '{project_name}' already exists"
+            })), 400
+
+        project_ref.set({
+            "project": project_name,
+            "total_images": 0,
+            "created_at": firestore.SERVER_TIMESTAMP,
+            "updated_at": firestore.SERVER_TIMESTAMP,
+        })
+
+        return _cors(jsonify({
+            "success": True,
+            "status": "success",
+            "message": "Project created successfully",
+            "project": project_name
+        })), 200
+
+    except Exception as e:
+        traceback.print_exc()
+        return _cors(jsonify({
+            "success": False,
+            "message": str(e)
+        })), 500
 #========================================    
 # delete class
 @app.route("/delete_class", methods=["POST"])
