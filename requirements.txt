@@ -19,5 +19,6 @@ torch
 torchvision
 
 ultralytics==8.3.0
+ onnxscript>=0.1.0
 
  
