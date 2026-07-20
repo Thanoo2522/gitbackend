@@ -481,14 +481,28 @@ def home():
     return f"{SERVER_ID} RUNNING"
 
 # =========================================================
-# 🌐 EXPORT_SERVICE_URL (ไม่บังคับ)
-# ตั้งค่านี้เป็น Environment Variable ให้ชี้ไปที่ export_service
-# (Cloud Run service แยกที่ไม่มี GPU) เพื่อให้ frontend เรียก
-# /app_config แล้วได้ URL นี้กลับไปอัตโนมัติ — ผู้ใช้ทั่วไปไม่ต้อง
-# ตั้งค่าอะไรเองเลย ถ้าไม่ได้ตั้งค่าตัวแปรนี้ไว้ ระบบจะคืนค่า null
-# แล้วฝั่ง frontend จะ fallback ไปใช้ cloud_url (service นี้) แทนเอง
+# 🌐 EXPORT_SERVICE_URL / TRAIN_SERVICE_URL (ไม่บังคับทั้งคู่)
+# ตั้งค่าเป็น Environment Variable เพื่อให้ frontend เรียก /app_config
+# แล้วได้ URL ที่ถูกต้องกลับไปอัตโนมัติ — ผู้ใช้ทั่วไปไม่ต้องตั้งค่าอะไรเอง
+#
+# ⚠️ เหตุผลที่ต้องมี TRAIN_SERVICE_URL:
+# HUB (hublineoa) สุ่มมอบหมาย cloud_url ให้ผู้ใช้จาก worker pool ที่มีอยู่
+# ซึ่งรวมทั้ง gitbackend (ไม่มี GPU) และ gitbackend-gpu (มี GPU) ปนกัน
+# ถ้าผู้ใช้ดันได้ cloud_url เป็น gitbackend (ไม่มี GPU) แล้วกด "Train"
+# request จะไปตกที่ worker ที่ไม่มี GPU ทำให้เทรน YOLOv8 บน CPU ช้ามาก
+#
+# วิธีแก้: ตั้งค่า TRAIN_SERVICE_URL ให้ชี้ไปที่ gitbackend-gpu URL ตรงๆ
+# บน worker ทุกตัวใน pool (ทั้ง gitbackend และ gitbackend-gpu เอง เพราะใช้
+# app.py ไฟล์เดียวกัน) แล้ว frontend จะถาม /app_config จาก cloud_url ที่ได้รับ
+# มา (ไม่ว่าจะเป็น worker ไหน) เพื่อขอ URL ที่ถูกต้องสำหรับงานเทรนโดยเฉพาะ
+# เสมอ — รับประกันว่างานเทรนไปตกที่ gitbackend-gpu 100% ไม่ว่า HUB จะสุ่ม
+# มอบหมาย cloud_url เป็นตัวไหนก็ตาม
+#
+# ถ้าไม่ได้ตั้งค่าตัวแปรนี้ไว้เลย ระบบจะคืนค่า null แล้วฝั่ง frontend จะ
+# fallback ไปใช้ cloud_url เดิมแบบเงียบๆ (พฤติกรรมเดิมก่อนแก้ไขนี้)
 # =========================================================
 EXPORT_SERVICE_URL = os.environ.get("EXPORT_SERVICE_URL")
+TRAIN_SERVICE_URL = os.environ.get("TRAIN_SERVICE_URL")
 
 
 @app.route("/app_config", methods=["GET", "OPTIONS"])
@@ -502,7 +516,8 @@ def app_config():
 
     resp = jsonify({
         "success": True,
-        "export_service_url": EXPORT_SERVICE_URL
+        "export_service_url": EXPORT_SERVICE_URL,
+        "train_service_url": TRAIN_SERVICE_URL
     })
     resp.headers.add("Access-Control-Allow-Origin", "*")
     return resp
@@ -3928,6 +3943,59 @@ def upload_dataset_all_modes():
 
 
 # =========================================================
+# 🖼️ LIST PROJECT IMAGES (V2)
+# ดึงรายการภาพล่าสุดที่บันทึกไปยัง Firebase แล้ว สำหรับแสดงเป็นแกลเลอรีที่หน้า
+# DetectionCapture.jsx (แทนที่แผงเลือก Augmentation แบบเดิม)
+# อ่านจาก user/{email}/project/{project}/images เรียงจากใหม่สุดก่อน
+# =========================================================
+@app.route("/list_project_images_v2", methods=["POST", "OPTIONS"])
+def list_project_images_v2():
+    if request.method == "OPTIONS":
+        response = jsonify({"success": True})
+        response.headers.add("Access-Control-Allow-Origin", "*")
+        response.headers.add("Access-Control-Allow-Headers", "Content-Type,Authorization")
+        response.headers.add("Access-Control-Allow-Methods", "POST,OPTIONS")
+        return response, 200
+
+    try:
+        data = request.get_json(silent=True) or {}
+        email = data.get("email")
+        project = data.get("project")
+        limit = int(data.get("limit", 30))
+
+        if not email or not project:
+            return _cors(jsonify({"success": False, "message": "Missing email or project"})), 400
+
+        docs = (
+            worker_db.collection("user").document(email)
+            .collection("project").document(project)
+            .collection("images")
+            .order_by("timestamp", direction=firestore.Query.DESCENDING)
+            .limit(limit)
+            .stream()
+        )
+
+        images = []
+        for doc in docs:
+            d = doc.to_dict() or {}
+            images.append({
+                "id": doc.id,
+                "image_url": d.get("image_url"),
+                "aug_mode": d.get("aug_mode", "original"),
+                "image_filename": d.get("image_filename"),
+                "timestamp": str(d.get("timestamp", "")),
+            })
+
+        resp = jsonify({"success": True, "images": images, "count": len(images)})
+        resp.headers.add("Access-Control-Allow-Origin", "*")
+        return resp, 200
+
+    except Exception as e:
+        traceback.print_exc()
+        return _cors(jsonify({"success": False, "message": str(e)})), 500
+
+
+# =========================================================
 # DELETE PROJECT
 # ลบทั้งโปรเจกต์:
 #   1) Storage   : ลบไฟล์ทุกไฟล์ใต้ path  {email}/{project}/...
@@ -4232,7 +4300,7 @@ def delete_image():
             "message": str(e)
         }), 500  
  
-# ========================================= 
+# =============================================== 
 # RUN
 # ======================================================
 if __name__ == "__main__":
