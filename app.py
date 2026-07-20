@@ -43,8 +43,8 @@ import io
  
 import tempfile
 import shutil
-import threading
 import traceback
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
  
  
@@ -478,6 +478,33 @@ start_heartbeat_once()
 def home():
 
     return f"{SERVER_ID} RUNNING"
+
+# =========================================================
+# 🌐 EXPORT_SERVICE_URL (ไม่บังคับ)
+# ตั้งค่านี้เป็น Environment Variable ให้ชี้ไปที่ export_service
+# (Cloud Run service แยกที่ไม่มี GPU) เพื่อให้ frontend เรียก
+# /app_config แล้วได้ URL นี้กลับไปอัตโนมัติ — ผู้ใช้ทั่วไปไม่ต้อง
+# ตั้งค่าอะไรเองเลย ถ้าไม่ได้ตั้งค่าตัวแปรนี้ไว้ ระบบจะคืนค่า null
+# แล้วฝั่ง frontend จะ fallback ไปใช้ cloud_url (service นี้) แทนเอง
+# =========================================================
+EXPORT_SERVICE_URL = os.environ.get("EXPORT_SERVICE_URL")
+
+
+@app.route("/app_config", methods=["GET", "OPTIONS"])
+def app_config():
+    if request.method == "OPTIONS":
+        response = jsonify({"success": True})
+        response.headers.add("Access-Control-Allow-Origin", "*")
+        response.headers.add("Access-Control-Allow-Headers", "Content-Type,Authorization")
+        response.headers.add("Access-Control-Allow-Methods", "GET,OPTIONS")
+        return response, 200
+
+    resp = jsonify({
+        "success": True,
+        "export_service_url": EXPORT_SERVICE_URL
+    })
+    resp.headers.add("Access-Control-Allow-Origin", "*")
+    return resp
 # =========================================================
 # GET USER PLAN
 # อ่านข้อมูลแผนปัจจุบันของ user จาก Firestore
@@ -3036,7 +3063,7 @@ def _cors(resp):
 
 
 # =========================================================
-# 🌟 V2: EXPORT / TRAIN / EDGE-EXPORT — Mixed Annotation
+# 🌟 V2: EXPORT / TRAIN — Mixed Annotation
 # (bounding_boxes + polygons ในโปรเจกต์เดียวกัน อ่านจาก
 #  user/{email}/project/{project}/images ที่เดียว ไม่มี taskType แล้ว)
 #
@@ -3044,6 +3071,10 @@ def _cors(resp):
 # แล้วเทรนรวมกับ Polygon จริงด้วย YOLOv8-seg เสมอ (yolov8n-seg.pt)
 # เพราะ segmentation เป็น superset ของ detection — โมเดลเดียวให้ทั้ง
 # mask และ bounding box ทำให้ label สองแบบอยู่ในชุดเทรนเดียวกันได้จริง
+#
+# ⚠️ หมายเหตุ: Export for Edge (ONNX/TFLite/NCNN) ถูกย้ายออกไปเป็น
+# service แยกต่างหาก (export_service, ไม่มี GPU) แล้ว เพื่อลดค่าใช้จ่าย
+# GPU ของ service นี้ตอนไม่ได้เทรน — ดูรายละเอียดที่ export_service/app.py
 # =========================================================
 
 def _yolo_normalize_polygon(points, img_w, img_h):
@@ -3238,12 +3269,17 @@ def export_dataset():
 det_seg_training_status = {}   # key = f"{email}/{project}"
 
 
-def _build_yolo_seg_dataset_on_disk(email, project, base_dir, val_ratio=0.2):
+def _build_yolo_seg_dataset_on_disk(email, project, base_dir, val_ratio=0.2, max_workers=8):
     """
     ดาวน์โหลดรูป + แปลง annotation (ทั้ง bounding_boxes และ polygons ที่อยู่ในภาพเดียวกัน)
     เป็น YOLO-seg format เดียวกันหมด (กล่องแปลงเป็น polygon สี่เหลี่ยม 4 จุด)
     ทำให้เทรนโปรเจกต์ที่ label ปนกันได้ในโมเดลเดียว
     คืนค่า (class_names, total_images)
+
+    ⚡ ดาวน์โหลดรูปพร้อมกันหลายไฟล์ (ThreadPoolExecutor) แทนการดาวน์โหลดทีละไฟล์ตามลำดับ
+    เพราะขั้นตอนนี้เป็น I/O-bound (รอ network) ล้วนๆ แต่รันอยู่บน instance ที่มี GPU ติดอยู่
+    (คิดค่าใช้จ่ายเต็มตลอดเวลาที่ instance ทำงาน ไม่ว่า GPU จะได้ใช้งานจริงหรือแค่รอเฉยๆ)
+    การดาวน์โหลดแบบขนานช่วยลดเวลาที่ "เสียเปล่า" ตรงนี้ได้มาก โดยเฉพาะ dataset ใหญ่ (1,000+ รูป)
     """
     image_docs = list(
         worker_db.collection("user").document(email)
@@ -3265,8 +3301,12 @@ def _build_yolo_seg_dataset_on_disk(email, project, base_dir, val_ratio=0.2):
         os.makedirs(os.path.join(base_dir, sub), exist_ok=True)
 
     n_docs = len(image_docs)
-    total = 0
 
+    # ----------------------------------------------------------
+    # 1) เตรียมรายการงานดาวน์โหลดก่อน (ยังไม่ยิง request จริง)
+    #    ตัดสิน train/val split ตรงนี้เลย เพราะอิงแค่ idx/n_docs ไม่ต้องรอข้อมูลจาก network
+    # ----------------------------------------------------------
+    tasks = []
     for idx, doc in enumerate(image_docs):
         d = doc.to_dict() or {}
         storage_path = d.get("storage_path")
@@ -3277,12 +3317,52 @@ def _build_yolo_seg_dataset_on_disk(email, project, base_dir, val_ratio=0.2):
         if not storage_path or not img_w or not img_h:
             continue
 
-        try:
-            img_bytes = bucket.blob(storage_path).download_as_bytes()
-        except Exception:
-            continue
-
         split = "val" if (n_docs >= 5 and idx % max(2, int(1 / val_ratio)) == 0) else "train"
+
+        tasks.append({
+            "idx": idx,
+            "d": d,
+            "storage_path": storage_path,
+            "img_w": img_w,
+            "img_h": img_h,
+            "filename": filename,
+            "split": split
+        })
+
+    def _download_one(task):
+        try:
+            img_bytes = bucket.blob(task["storage_path"]).download_as_bytes()
+        except Exception:
+            return task, None
+        return task, img_bytes
+
+    # ----------------------------------------------------------
+    # 2) ดาวน์โหลดพร้อมกันหลายไฟล์ (I/O-bound -> ThreadPoolExecutor เหมาะสุด
+    #    เพราะรอ network เป็นหลัก ไม่ใช่งานที่กิน CPU จริงจัง)
+    # ----------------------------------------------------------
+    downloaded = []
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = [executor.submit(_download_one, t) for t in tasks]
+        for future in as_completed(futures):
+            task, img_bytes = future.result()
+            if img_bytes is None:
+                continue  # ดาวน์โหลดไม่สำเร็จ -> ข้ามรูปนี้ไปเลย เหมือนพฤติกรรมเดิม
+            downloaded.append((task, img_bytes))
+
+    # เรียงกลับตามลำดับเดิม (idx) ก่อนเขียนไฟล์/label เพื่อให้ class_names ได้ id
+    # ตรงกับลำดับแบบรันทีละไฟล์เป๊ะๆ (ผลลัพธ์ reproducible เหมือนเดิม ไม่ขึ้นกับว่าไฟล์ไหนโหลดเสร็จก่อน)
+    downloaded.sort(key=lambda pair: pair[0]["idx"])
+
+    # ----------------------------------------------------------
+    # 3) เขียนไฟล์ภาพ + label (เร็ว ไม่ต้องรอ network แล้ว) ตามลำดับเดิม
+    # ----------------------------------------------------------
+    total = 0
+    for task, img_bytes in downloaded:
+        d = task["d"]
+        filename = task["filename"]
+        split = task["split"]
+        img_w = task["img_w"]
+        img_h = task["img_h"]
 
         with open(os.path.join(base_dir, "images", split, filename), "wb") as f:
             f.write(img_bytes)
@@ -3472,238 +3552,6 @@ def download_det_seg_model():
         mimetype="application/zip",
         as_attachment=True,
         download_name=f"{project}_yolov8_model.zip"
-    )
-
-
-# =========================================================
-# 🌐 EXPORT FOR EDGE (ONNX / TFLite / NCNN / TensorRT) — mixed annotation
-# ต่อยอดจาก best.pt ที่ train เสร็จแล้ว (model_det_seg/best.pt)
-# ใช้ ultralytics YOLO(...).export(format=...) ซึ่งกิน CPU/เวลาพอสมควร
-# จึงรันเป็น background thread + poll status เหมือน train_det_seg เดิม
-#
-# ⚠️ กรณีพิเศษ "engine" (TensorRT):
-#    TensorRT engine ต้อง build บน GPU สถาปัตยกรรมเดียวกับปลายทางจริงเท่านั้น
-#    (build ข้ามเครื่องไม่ได้) และ Cloud Run ไม่มี GPU เลย จึงทำได้แค่
-#    export เป็น ONNX ที่นี่ แล้วแนบสคริปต์ trtexec ให้ผู้ใช้ไป build
-#    .engine เองบนบอร์ด Jetson จริงตอนติดตั้งหน้างาน
-# =========================================================
-
-edge_export_status = {}   # key = f"{email}/{project}/{edge_format}"
-
-VALID_EDGE_FORMATS = ("onnx", "tflite", "ncnn", "engine")
-
-EDGE_FORMAT_MAP = {
-    "onnx": "onnx",
-    "tflite": "tflite",
-    "ncnn": "ncnn",
-}
-
-EDGE_FORMAT_IS_DIR = {
-    "onnx": False,
-    "tflite": True,
-    "ncnn": True,
-}
-
-
-def _build_trt_zip(zf, exported_onnx_path, project):
-    """
-    สร้างเนื้อหา zip สำหรับกรณี edge_format == "engine":
-    แนบ model.onnx + สคริปต์ build_engine.sh + README.txt
-    (ไม่ build .engine จริงที่นี่ เพราะ Cloud Run ไม่มี GPU)
-    """
-    zf.write(exported_onnx_path, "model.onnx")
-
-    build_script = f"""#!/bin/bash
-# ==========================================================
-# สคริปต์ build TensorRT engine จาก ONNX
-# ⚠️ ต้องรันบนบอร์ด Jetson จริง (Orin Nano/NX/AGX) ที่จะ deploy เท่านั้น
-#    ห้าม build บนเครื่องอื่นแล้วก๊อปปี้ .engine ไปใช้ข้ามบอร์ด
-#    ต้องติดตั้ง JetPack SDK (มี trtexec ติดมาให้อยู่แล้ว) ก่อนรัน
-# ==========================================================
-
-trtexec --onnx=model.onnx \\
-        --saveEngine=model.engine \\
-        --fp16 \\
-        --workspace=4096
-
-echo "✅ Build เสร็จแล้ว: model.engine"
-echo "นำไปใช้กับ project: {project}"
-"""
-    zf.writestr("build_engine.sh", build_script)
-
-    readme = """# วิธีใช้งาน
-
-1. คัดลอกไฟล์ model.onnx และ build_engine.sh ไปไว้บนบอร์ด Jetson ที่จะ deploy จริง
-2. รันคำสั่ง: chmod +x build_engine.sh && ./build_engine.sh
-3. จะได้ไฟล์ model.engine สำหรับใช้งานบนบอร์ดนั้นโดยเฉพาะ
-   (ห้ามนำ .engine ไปใช้ข้ามบอร์ดรุ่นอื่น ต้อง build ใหม่ทุกครั้งที่เปลี่ยนบอร์ด)
-"""
-    zf.writestr("README.txt", readme)
-
-
-def run_edge_export(email, project, edge_format):
-    key = f"{email}/{project}/{edge_format}"
-    tmp_dir = tempfile.mkdtemp(prefix="edge_export_")
-
-    try:
-        from ultralytics import YOLO
-
-        edge_export_status[key]["progress"] = 10
-
-        # ----------------------------------------------------
-        # 1) ดาวน์โหลด best.pt จาก Storage มาไว้ที่ tmp_dir ก่อน
-        # ----------------------------------------------------
-        model_storage_path = f"{email}/{project}/model_det_seg/best.pt"
-        model_blob = bucket.blob(model_storage_path)
-
-        if not model_blob.exists():
-            raise ValueError("ไม่พบ best.pt กรุณา train โมเดลให้เสร็จก่อน")
-
-        local_pt_path = os.path.join(tmp_dir, "best.pt")
-        model_blob.download_to_filename(local_pt_path)
-
-        edge_export_status[key]["progress"] = 30
-
-        # ----------------------------------------------------
-        # 2) โหลดโมเดลแล้วสั่ง export
-        #    - engine -> export เป็น onnx แทน (ดู comment ด้านบนไฟล์)
-        #    - อื่นๆ  -> export ตาม format จริง
-        # ----------------------------------------------------
-        model = YOLO(local_pt_path)
-
-        if edge_format == "engine":
-            export_kwargs = {"format": "onnx", "imgsz": 640}
-        else:
-            export_kwargs = {"format": EDGE_FORMAT_MAP[edge_format], "imgsz": 640}
-
-        exported_path = model.export(**export_kwargs)
-        # exported_path คือ path (str) ของไฟล์หรือโฟลเดอร์หลักที่ export ออกมา
-        # อยู่ข้างๆ best.pt ใน tmp_dir เดียวกัน
-
-        edge_export_status[key]["progress"] = 80
-
-        # ----------------------------------------------------
-        # 3) Zip ผลลัพธ์ทั้งหมด (ไฟล์เดี่ยว/โฟลเดอร์/ONNX+script) แล้วอัปโหลดขึ้น Storage
-        # ----------------------------------------------------
-        zip_local_path = os.path.join(tmp_dir, f"edge_{edge_format}.zip")
-
-        with zipfile.ZipFile(zip_local_path, "w", zipfile.ZIP_DEFLATED) as zf:
-            if edge_format == "engine":
-                _build_trt_zip(zf, exported_path, project)
-            elif EDGE_FORMAT_IS_DIR.get(edge_format) and os.path.isdir(exported_path):
-                for root, _, files in os.walk(exported_path):
-                    for fname in files:
-                        local_file = os.path.join(root, fname)
-                        arcname = os.path.relpath(local_file, tmp_dir)
-                        zf.write(local_file, arcname)
-            else:
-                zf.write(exported_path, os.path.basename(exported_path))
-
-            # แนบ classes.json เดิมไปด้วยทุก format เพราะฝั่ง edge ต้องใช้ mapping class เดียวกัน
-            labels_path = f"{email}/{project}/model_det_seg/classes.json"
-            labels_blob = bucket.blob(labels_path)
-            if labels_blob.exists():
-                zf.writestr("classes.json", labels_blob.download_as_bytes())
-
-        edge_storage_path = f"{email}/{project}/model_edge/{edge_format}.zip"
-        bucket.blob(edge_storage_path).upload_from_filename(zip_local_path)
-
-        edge_export_status[key] = {
-            "status": "done",
-            "progress": 100,
-            "format": edge_format
-        }
-
-    except Exception as e:
-        traceback.print_exc()
-        edge_export_status[key] = {"status": "error", "message": str(e)}
-
-    finally:
-        shutil.rmtree(tmp_dir, ignore_errors=True)
-
-
-@app.route("/export_edge_format", methods=["POST", "OPTIONS"])
-def export_edge_format():
-    if request.method == "OPTIONS":
-        response = jsonify({"success": True})
-        response.headers.add("Access-Control-Allow-Origin", "*")
-        response.headers.add("Access-Control-Allow-Headers", "Content-Type,Authorization")
-        response.headers.add("Access-Control-Allow-Methods", "POST,OPTIONS")
-        return response, 200
-
-    data = request.get_json(silent=True) or {}
-    email = data.get("email")
-    project = data.get("project")
-    edge_format = (data.get("edgeFormat") or "onnx").strip().lower()
-
-    if not email or not project:
-        return jsonify({"success": False, "message": "Missing email or project"}), 400
-
-    if edge_format not in VALID_EDGE_FORMATS:
-        return jsonify({
-            "success": False,
-            "message": f"edgeFormat must be one of {VALID_EDGE_FORMATS}"
-        }), 400
-
-    # เช็คว่ามี best.pt อยู่จริงก่อนเริ่ม thread (ตอบ error ทันที ไม่ต้องรอ poll)
-    model_storage_path = f"{email}/{project}/model_det_seg/best.pt"
-    if not bucket.blob(model_storage_path).exists():
-        return jsonify({
-            "success": False,
-            "message": "ไม่พบโมเดลที่ train แล้ว กรุณา train ให้เสร็จก่อน"
-        }), 404
-
-    key = f"{email}/{project}/{edge_format}"
-    edge_export_status[key] = {"status": "running", "progress": 0}
-
-    thread = threading.Thread(
-        target=run_edge_export,
-        args=(email, project, edge_format)
-    )
-    thread.start()
-
-    resp = jsonify({"success": True, "message": "Edge export started"})
-    resp.headers.add("Access-Control-Allow-Origin", "*")
-    return resp
-
-
-@app.route("/export_edge_status", methods=["POST"])
-def export_edge_status():
-    data = request.get_json(silent=True) or {}
-    email = data.get("email")
-    project = data.get("project")
-    edge_format = (data.get("edgeFormat") or "onnx").strip().lower()
-
-    key = f"{email}/{project}/{edge_format}"
-    resp = jsonify(edge_export_status.get(key, {"status": "idle"}))
-    resp.headers.add("Access-Control-Allow-Origin", "*")
-    return resp
-
-
-@app.route("/download_edge_model", methods=["POST"])
-def download_edge_model():
-    data = request.get_json(silent=True) or {}
-    email = data.get("email")
-    project = data.get("project")
-    edge_format = (data.get("edgeFormat") or "onnx").strip().lower()
-
-    if not email or not project or edge_format not in VALID_EDGE_FORMATS:
-        return jsonify({"success": False, "message": "Invalid request"}), 400
-
-    edge_storage_path = f"{email}/{project}/model_edge/{edge_format}.zip"
-    blob = bucket.blob(edge_storage_path)
-
-    if not blob.exists():
-        return jsonify({
-            "success": False,
-            "message": "ยังไม่มีไฟล์ export กรุณา export ก่อน"
-        }), 404
-
-    return send_file(
-        io.BytesIO(blob.download_as_bytes()),
-        mimetype="application/zip",
-        as_attachment=True,
-        download_name=f"{project}_{edge_format}.zip"
     )
 
 

@@ -1,24 +1,22 @@
- 
-
 Flask
 flask-cors
 gunicorn
-requests
-Pillow
 firebase-admin
-werkzeug
-tensorflow==2.12.0
-numpy>=1.22,<1.24
-tf2onnx>=1.16.1
-onnx>=1.14.0
+requests
 
-# ⚠️ วางไว้ก่อน ultralytics เพื่อบังคับ pip resolve เป็นเวอร์ชันเบาที่เข้ากับ Cloud Run
-opencv-python-headless
+numpy>=1.22,<1.24
+
+# ⚠️ CPU-only wheels (เล็กกว่า/เร็วกว่าตอน build มาก เพราะไม่มี GPU ให้ใช้อยู่แล้วใน service นี้)
 --extra-index-url https://download.pytorch.org/whl/cpu
 torch
 torchvision
 
 ultralytics==8.3.0
- onnxscript>=0.1.0
+onnx>=1.14.0
+onnxscript>=0.1.0
+
+# หมายเหตุ: ถ้าต้องการ export format "tflite" ด้วย ต้องเพิ่ม tensorflow กลับเข้ามา
+# (จะทำให้ image ใหญ่ขึ้นและ build ช้าลง) — ถ้าใช้แค่ onnx ไม่ต้องเพิ่ม
+
 
  
