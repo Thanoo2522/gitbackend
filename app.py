@@ -22,7 +22,8 @@ from PIL import (
     Image,
     ImageEnhance,
     ImageChops,
-    ImageOps
+    ImageOps,
+    ImageFilter
 )
 
  
@@ -3063,6 +3064,42 @@ def _cors(resp):
 
 
 # =========================================================
+# 🎨 Pixel-level augmentation ทำฝั่ง Server ด้วย PIL
+# (เดิมฝั่ง React ใช้ CSS filter ทำเอง client-side ทีละโหมด ตอนนี้ต้อง
+#  ทำซ้ำที่ server เพื่อ generate ครบ 12 แบบในคำขอเดียว)
+# ค่าตัวเลขจงใจให้ตรงกับ CSS filter เดิมที่ frontend เคยใช้ (getCanvasFilter)
+# เพื่อให้ผลลัพธ์ภาพออกมาใกล้เคียงกับที่เคยพรีวิวไว้มากที่สุด
+# =========================================================
+def apply_pixel_augmentation_pil(img, mode):
+    if mode == "brightness_dark":
+        return ImageEnhance.Brightness(img).enhance(0.6)
+    if mode == "brightness_bright":
+        return ImageEnhance.Brightness(img).enhance(1.4)
+    if mode == "grayscale":
+        return img.convert("L").convert("RGB")
+    if mode == "blur":
+        return img.filter(ImageFilter.GaussianBlur(3))
+    if mode == "contrast_low":
+        return ImageEnhance.Contrast(img).enhance(0.6)
+    if mode == "contrast_high":
+        return ImageEnhance.Contrast(img).enhance(1.6)
+    if mode == "saturation_low":
+        return ImageEnhance.Color(img).enhance(0.3)
+    if mode == "saturation_high":
+        return ImageEnhance.Color(img).enhance(2.2)
+    return img
+
+
+# 🌟 รายชื่อ 12 โหมดที่ /api/upload_dataset_all_modes จะ generate ให้ครบในคำขอเดียว
+# (เรียงตามลำดับเดียวกับ dropdown ฝั่ง React — ไม่รวม flip_horizontal ตามที่ตัดออกจาก UI แล้ว)
+ALL_AUG_MODES = [
+    "original", "rotation_-10", "rotation_10", "zoom_in",
+    "brightness_dark", "brightness_bright", "grayscale", "blur",
+    "contrast_low", "contrast_high", "saturation_low", "saturation_high"
+]
+
+
+# =========================================================
 # 🌟 V2: EXPORT / TRAIN — Mixed Annotation
 # (bounding_boxes + polygons ในโปรเจกต์เดียวกัน อ่านจาก
 #  user/{email}/project/{project}/images ที่เดียว ไม่มี taskType แล้ว)
@@ -3713,6 +3750,181 @@ def upload_dataset_v2():
     except Exception as e:
         traceback.print_exc()
         return _cors(jsonify({"error": str(e)})), 500
+
+
+# =========================================================
+# 🌟 /api/upload_dataset_all_modes
+# กดบันทึกครั้งเดียว -> Server สร้างครบทั้ง 12 แบบ (ALL_AUG_MODES) ให้เอง
+# แทนที่การให้ frontend เลือกทีละโหมดแล้วกดบันทึกซ้ำ 12 รอบ
+#
+# รับแค่ภาพต้นฉบับ (aug_mode = original) + annotation ชุดเดียว
+# แล้ววนสร้างภาพ+annotation ของแต่ละโหมดที่ฝั่ง server ทั้งหมด บันทึกลง
+# Storage/Firestore เป็น 12 documents แยกกัน (เหมือนบันทึกทีละโหมดแบบเดิม
+# ทุกอย่าง แค่ทำให้อัตโนมัติในคำขอเดียว)
+#
+# ถ้าบางโหมด error ระหว่างสร้าง (กรณีพิเศษ) จะข้ามโหมดนั้นไปแล้วทำโหมดอื่นต่อ
+# ไม่ทำให้ทั้ง request ล้มเหลวไปด้วย — ตอบกลับมาว่าสำเร็จกี่แบบจากทั้งหมด
+# =========================================================
+@app.route("/api/upload_dataset_all_modes", methods=["POST", "OPTIONS"])
+def upload_dataset_all_modes():
+    if request.method == "OPTIONS":
+        response = jsonify({"success": True})
+        response.headers.add("Access-Control-Allow-Origin", "*")
+        response.headers.add("Access-Control-Allow-Headers", "Content-Type,Authorization")
+        response.headers.add("Access-Control-Allow-Methods", "POST,OPTIONS")
+        return response, 200
+
+    try:
+        data = request.json
+        if not data:
+            return _cors(jsonify({"success": False, "message": "Missing request body"})), 400
+
+        email = data.get("email")
+        project = data.get("project_name")
+        image_data = data.get("image_data")  # Base64 string (ภาพต้นฉบับเท่านั้น)
+        canvas_width = data.get("canvas_width")
+        canvas_height = data.get("canvas_height")
+
+        raw_boxes = data.get("bounding_boxes", []) or []
+        raw_polygons = data.get("polygons", []) or []
+
+        if not all([email, project, image_data]):
+            return _cors(jsonify({
+                "success": False,
+                "message": "Missing required fields (email, project_name, image_data)"
+            })), 400
+
+        if not raw_boxes and not raw_polygons:
+            return _cors(jsonify({
+                "success": False,
+                "message": "ต้องมี bounding_boxes หรือ polygons อย่างน้อย 1 รายการ"
+            })), 400
+
+        # ---------------------------------------------------------
+        # 1. Decode base64 -> PIL Image (ภาพต้นฉบับ ใช้เป็นฐานของทุกโหมด)
+        # ---------------------------------------------------------
+        if "," in image_data:
+            _, base64_str = image_data.split(",", 1)
+        else:
+            base64_str = image_data
+
+        image_bytes_in = base64.b64decode(base64_str)
+        pil_img_original = Image.open(io.BytesIO(image_bytes_in)).convert("RGB")
+        img_w, img_h = pil_img_original.size
+
+        # ---------------------------------------------------------
+        # 2. Normalize พิกัดจาก container space -> image pixel space ครั้งเดียว
+        #    (ใช้ร่วมกันได้ทุกโหมด เพราะภาพต้นฉบับก่อน augment มีขนาดเดียวกันหมด)
+        # ---------------------------------------------------------
+        normalized_boxes = (
+            normalize_boxes_to_image_space(raw_boxes, canvas_width, canvas_height, img_w, img_h)
+            if raw_boxes else []
+        )
+        normalized_polygons = (
+            normalize_polygons_to_image_space(raw_polygons, canvas_width, canvas_height, img_w, img_h)
+            if raw_polygons else []
+        )
+
+        project_ref = (
+            worker_db.collection("user").document(email)
+            .collection("project").document(project)
+        )
+
+        saved_modes = []
+
+        # ---------------------------------------------------------
+        # 3. วนสร้างภาพ + annotation ของแต่ละโหมดทีละอัน แล้วบันทึกทันที
+        # ---------------------------------------------------------
+        for mode in ALL_AUG_MODES:
+            try:
+                if mode == "original":
+                    out_img = pil_img_original
+                    final_boxes = normalized_boxes
+                    final_polygons = normalized_polygons
+
+                elif mode in GEOMETRIC_MODES:
+                    if normalized_boxes:
+                        out_img, final_boxes = apply_geometric_augmentation(
+                            pil_img_original, mode, normalized_boxes
+                        )
+                    else:
+                        out_img, _ = apply_geometric_augmentation(pil_img_original, mode, [])
+                        final_boxes = []
+
+                    final_polygons = (
+                        apply_geometric_augmentation_to_polygons(mode, normalized_polygons, img_w, img_h)
+                        if normalized_polygons else []
+                    )
+
+                else:  # pixel-level mode
+                    out_img = apply_pixel_augmentation_pil(pil_img_original, mode)
+                    final_boxes = normalized_boxes
+                    final_polygons = normalized_polygons
+
+                out_buffer = io.BytesIO()
+                out_img.save(out_buffer, format="JPEG", quality=92)
+                image_bytes_out = out_buffer.getvalue()
+
+                filename = f"{int(time.time())}_{uuid.uuid4().hex[:8]}.jpg"
+                storage_path = f"{email}/{project}/{filename}"
+
+                blob = bucket.blob(storage_path)
+                blob.upload_from_string(image_bytes_out, content_type="image/jpeg")
+                blob.make_public()
+                image_url = blob.public_url
+
+                doc_id = filename.split(".")[0]
+                doc_ref = (
+                    worker_db.collection("user").document(email)
+                    .collection("project").document(project)
+                    .collection("images").document(doc_id)
+                )
+                doc_ref.set({
+                    "image_filename": filename,
+                    "storage_path": storage_path,
+                    "image_url": image_url,
+                    "aug_mode": mode,
+                    "image_width": img_w,
+                    "image_height": img_h,
+                    "canvas_width_at_capture": canvas_width,
+                    "canvas_height_at_capture": canvas_height,
+                    "bounding_boxes": final_boxes,
+                    "polygons": final_polygons,
+                    "timestamp": datetime.utcnow(),
+                })
+
+                saved_modes.append(mode)
+
+            except Exception:
+                # โหมดนี้ error -> ข้ามไปทำโหมดถัดไป ไม่ให้ล้มทั้ง request
+                traceback.print_exc()
+                continue
+
+        if not saved_modes:
+            return _cors(jsonify({
+                "success": False,
+                "message": "ไม่สามารถสร้าง augmentation ใดๆ ได้เลย กรุณาลองใหม่อีกครั้ง"
+            })), 500
+
+        # ---------------------------------------------------------
+        # 4. อัปเดตยอดรวมของ project ครั้งเดียว (+จำนวนที่สำเร็จจริง)
+        # ---------------------------------------------------------
+        project_ref.set({
+            "project": project,
+            "total_images": firestore.Increment(len(saved_modes)),
+            "updated_at": firestore.SERVER_TIMESTAMP,
+        }, merge=True)
+
+        return _cors(jsonify({
+            "success": True,
+            "message": f"บันทึกสำเร็จ {len(saved_modes)}/{len(ALL_AUG_MODES)} แบบ",
+            "saved_modes": saved_modes,
+            "total_saved": len(saved_modes)
+        })), 200
+
+    except Exception as e:
+        traceback.print_exc()
+        return _cors(jsonify({"success": False, "message": str(e)})), 500
 
 
 # =========================================================
