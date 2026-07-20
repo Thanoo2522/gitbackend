@@ -14,6 +14,7 @@ torchvision
 ultralytics==8.3.0
 onnx>=1.14.0
 onnxscript>=0.1.0
+tensorflow==2.15.0
 
 # หมายเหตุ: ถ้าต้องการ export format "tflite" ด้วย ต้องเพิ่ม tensorflow กลับเข้ามา
 # (จะทำให้ image ใหญ่ขึ้นและ build ช้าลง) — ถ้าใช้แค่ onnx ไม่ต้องเพิ่ม
