@@ -1,0 +1,13 @@
+# Secrets - ห้าม commit เด็ดขาด
+worker-sa.json
+hub-sa.json
+*.env
+.env
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# VSCode
+.vscode/
