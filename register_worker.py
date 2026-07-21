@@ -22,8 +22,11 @@ import firebase_admin
 from firebase_admin import credentials, firestore
 
 
-def register_worker(hub_project: str, worker_id: str, cloud_url: str) -> None:
-    cred = credentials.ApplicationDefault()
+def register_worker(hub_project: str, worker_id: str, cloud_url: str, key_file: str = None) -> None:
+    if key_file:
+        cred = credentials.Certificate(key_file)
+    else:
+        cred = credentials.ApplicationDefault()
     firebase_admin.initialize_app(cred, {"projectId": hub_project})
     db = firestore.client()
 
@@ -54,9 +57,10 @@ def main() -> None:
     parser.add_argument("--hub-project", required=True, help="Firebase project id ของ Hub เช่น baselineoa")
     parser.add_argument("--worker-id", required=True, help="ชื่อ project/worker เช่น serverwork2")
     parser.add_argument("--cloud-url", required=True, help="URL ของ Cloud Run service gitbackend ที่เพิ่ง deploy")
+    parser.add_argument("--key-file", default=None, help="path ของ service account json key (ถ้าไม่ระบุ จะใช้ Application Default Credentials)")
     args = parser.parse_args()
 
-    register_worker(args.hub_project, args.worker_id, args.cloud_url)
+    register_worker(args.hub_project, args.worker_id, args.cloud_url, args.key_file)
 
 
 if __name__ == "__main__":

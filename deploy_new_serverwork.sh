@@ -136,6 +136,7 @@ gcloud run deploy gitbackend-gpu \
   --allow-unauthenticated \
   --cpu="$GPU_CPU" --memory="$GPU_MEMORY" \
   --gpu=1 --gpu-type="$GPU_TYPE" \
+  --no-gpu-zonal-redundancy \
   --no-cpu-throttling \
   --env-vars-file=/tmp/env-gitbackend-gpu.yaml
 GPU_URL=$(gcloud run services describe gitbackend-gpu \
@@ -162,7 +163,8 @@ echo "=== [8/8] ลงทะเบียน gitbackend (entry point หลัก
 python3 "$SCRIPT_DIR/register_worker.py" \
   --hub-project="$HUB_FIREBASE_PROJECT" \
   --worker-id="$WORKER_ID" \
-  --cloud-url="$GITBACKEND_URL"
+  --cloud-url="$GITBACKEND_URL" \
+  --key-file="$HUB_SA_FILE"
 
 rm -f /tmp/env-gitbackend.yaml /tmp/env-gitbackend-gpu.yaml
 
