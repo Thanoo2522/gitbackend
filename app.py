@@ -57,7 +57,7 @@ import math
 
  
 
-# ===================================================== 
+# =========================================================
 # FLASK
 # =========================================================
 app = Flask(__name__)
@@ -3575,6 +3575,58 @@ def train_det_seg_status():
     return resp
 
 
+# =========================================================
+# 🔎 CHECK TRAINED MODEL (เช็คจากไฟล์จริงใน Storage เสมอ)
+# ⚠️ ต่างจาก /train_det_seg_status ตรงที่ det_seg_training_status เป็นแค่
+# dict ในหน่วยความจำของ instance เท่านั้น — พอ instance ถูก scale ลงเหลือ 0
+# (ตาม Min Instances = 0) หรือ deploy revision ใหม่ ตัวแปรนี้จะรีเซ็ตทันที
+# ทั้งที่ไฟล์ best.pt ยังอยู่ครบใน Storage จริงๆ ทำให้ frontend เข้าใจผิดว่า
+# "ยังไม่เคยเทรน" หลัง reload หน้าเว็บ ทั้งที่จริงมีโมเดลพร้อมใช้งานอยู่แล้ว
+#
+# endpoint นี้เช็คจากไฟล์จริงเสมอ ไม่พึ่งความจำชั่วคราว จึงให้ผลถูกต้อง
+# แม้ instance เพิ่ง cold start มาใหม่ก็ตาม — frontend ควรเรียก endpoint นี้
+# ทุกครั้งที่โหลดหน้า Train Model เพื่อกู้สถานะ "เทรนเสร็จแล้ว" กลับมาแสดงผล
+# =========================================================
+@app.route("/check_trained_model", methods=["POST", "OPTIONS"])
+def check_trained_model():
+    if request.method == "OPTIONS":
+        response = jsonify({"success": True})
+        response.headers.add("Access-Control-Allow-Origin", "*")
+        response.headers.add("Access-Control-Allow-Headers", "Content-Type,Authorization")
+        response.headers.add("Access-Control-Allow-Methods", "POST,OPTIONS")
+        return response, 200
+
+    data = request.get_json(silent=True) or {}
+    email = data.get("email")
+    project = data.get("project")
+
+    if not email or not project:
+        return jsonify({"success": False, "message": "Missing email or project"}), 400
+
+    model_path = f"{email}/{project}/model_det_seg/best.pt"
+    labels_path = f"{email}/{project}/model_det_seg/classes.json"
+
+    model_blob = bucket.blob(model_path)
+    exists = model_blob.exists()
+
+    classes = []
+    if exists:
+        labels_blob = bucket.blob(labels_path)
+        if labels_blob.exists():
+            try:
+                classes = json.loads(labels_blob.download_as_bytes())
+            except Exception:
+                classes = []
+
+    resp = jsonify({
+        "success": True,
+        "exists": exists,
+        "classes": classes
+    })
+    resp.headers.add("Access-Control-Allow-Origin", "*")
+    return resp
+
+
 @app.route("/download_det_seg_model", methods=["POST"])
 def download_det_seg_model():
     data = request.get_json(silent=True) or {}
@@ -4300,7 +4352,7 @@ def delete_image():
             "message": str(e)
         }), 500  
  
-# =============================================== 
+# =========================================================
 # RUN
 # ======================================================
 if __name__ == "__main__":
