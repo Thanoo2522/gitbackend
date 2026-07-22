@@ -1,6 +1,7 @@
 Flask
 gunicorn
 firebase-admin
+numpy<2
 tensorflow==2.15.0
 tensorflowjs==4.19.0
-onnxscript>=0.1.0
+onnxscript==0.1.0
