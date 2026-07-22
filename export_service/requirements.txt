@@ -14,27 +14,4 @@ ultralytics==8.3.0
 onnx>=1.14.0
 onnxscript>=0.1.0
 
-# =========================================================
-# 🆕 จำเป็นสำหรับ export .tflite (ultralytics ทำ pipeline ภายใน:
-#    .pt -> .onnx -> onnx2tf -> TF SavedModel -> .tflite
-#    ขาดตัวไหนไปจะเจอ ModuleNotFoundError ทีละตัวไล่ตามลำดับนี้)
-# =========================================================
 
-# ใช้ tensorflow-cpu แทน tensorflow ธรรมดา เพราะ service นี้ไม่มี GPU อยู่แล้ว
-# (ตัด CUDA dependency ทิ้งไปเลย ช่วยลดขนาด image และเวลา build ลงพอสมควร)
-# จำกัดเวอร์ชัน <2.16 เพื่อให้ default Keras ยังเป็น Keras 2 (tf.keras) แบบเดิม
-# ถ้าใช้ TF>=2.16 จะโดนสลับเป็น Keras 3 อัตโนมัติ แล้วโค้ด export ของ
-# ultralytics ตัวนี้จะพังอีกแบบ (ต้องพึ่ง tf_keras compatibility package เพิ่ม)
-tensorflow-cpu>=2.13.0,<2.16.0
-
-# แปลง ONNX -> TensorFlow SavedModel (แกนหลักของ pipeline นี้)
-onnx2tf>=1.17.0
-
-# dependency ย่อยที่ onnx2tf เรียกใช้ภายใน (ขาดตัวไหนจะ error ทีละตัว)
-sng4onnx>=1.0.1
-onnxslim>=0.1.31
-onnx-graphsurgeon>=0.3.26
-onnxruntime
-
-# onnx2tf ใช้ตอน parse/เขียนไฟล์ .tflite ตอนท้าย pipeline
-flatbuffers>=23.5.26,<100
