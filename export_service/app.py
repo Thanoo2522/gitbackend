@@ -16,7 +16,7 @@ Deploy service นี้แยกเป็น Cloud Run service ใหม่:
   WORKER_FIREBASE_KEY  (Service Account JSON เดียวกับที่ gitbackend-gpu ใช้
                         เพื่อให้เข้าถึง Storage bucket เดียวกัน อ่าน best.pt
                         ที่เทรนไว้ และเขียนไฟล์ export กลับไปที่เดิม)
-==============================================================
+======================================================== 
 """
 
 from flask import Flask, request, jsonify, send_file
