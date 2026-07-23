@@ -6,13 +6,19 @@
 # torch + tensorflow ชนกันที่ numpy ABI เสมอไม่ว่าจะ pin เวอร์ชันไหนก็ตาม
 # TFLite ถูกแยกไปทำที่ tflite_service (คนละ container) แทนแล้ว
 #
+# ⚠️ ต้อง pin เวอร์ชัน torch/torchvision ให้ชัดเจน (ห้ามปล่อยเปิดกว้าง)
+# เพราะ PyTorch >= 2.9 เปลี่ยนมาใช้ ONNX exporter ตัวใหม่ (Dynamo-based)
+# เป็นค่า default ซึ่งต้องพึ่ง onnxscript เวอร์ชันที่รองรับ torch รุ่นนั้น
+# เจาะจง ("onnxscript._framework_apis.torch_X_Y") ถ้า pip ดึง torch รุ่นใหม่
+# กว่าที่ onnxscript รองรับ จะ import ไม่ได้ทันที pin ไว้ที่ 2.3.1 ซึ่งยังใช้
+# ONNX exporter แบบเดิม (TorchScript-based) ไม่ต้องพึ่ง onnxscript เวอร์ชัน
+# เจาะจงแบบนี้ ทำให้ build ผลลัพธ์เดิมซ้ำได้ทุกครั้ง (reproducible)
+#
 # ⚠️ onnxslim จำเป็นมาก แม้ export_service นี้จะ export แค่ ONNX/NCNN เอง
 # เพราะ ultralytics จะ "slim" (จัดระเบียบ) กราฟ ONNX ให้อัตโนมัติระหว่าง
-# export ถ้าเจอ onnxslimติดตั้งอยู่ — ถ้าไม่มี onnxslim ไฟล์ ONNX ที่ได้จะมี
+# export ถ้าเจอ onnxslim ติดตั้งอยู่ — ถ้าไม่มี onnxslim ไฟล์ ONNX ที่ได้จะมี
 # โครงสร้างกราฟที่ไม่ผ่านการจัดระเบียบ ทำให้ onnx2tf (ที่ tflite_service ใช้
-# แปลงเป็น TFLite ทีหลัง) สับสนกับ Conv/ConvTranspose บางแบบ (คิดว่าเป็น
-# quantized model ทั้งที่ไม่ใช่) จนพังตอนแปลง — ต้อง pin เวอร์ชันเดียวกับที่
-# Ultralytics ทดสอบไว้ (0.1.31) เพื่อผลลัพธ์ที่แน่นอนตรงกัน
+# แปลงเป็น TFLite ทีหลัง) สับสนกับ Conv/ConvTranspose บางแบบ
 # ============================================================
 
 Flask
@@ -24,8 +30,8 @@ requests
 numpy>=1.22,<1.24
 
 --extra-index-url https://download.pytorch.org/whl/cpu
-torch
-torchvision
+torch==2.3.1
+torchvision==0.18.1
 
 ultralytics==8.3.0
 onnx==1.16.1
