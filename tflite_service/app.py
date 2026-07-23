@@ -66,6 +66,23 @@ def convert_to_tflite():
         # import ตรงนี้ (ไม่ import ไว้บนสุดของไฟล์) เพื่อไม่ให้กระทบ startup time
         # ของ service ถ้า route นี้ยังไม่เคยถูกเรียกใช้
         import onnx2tf
+        import numpy as np
+
+        # ----------------------------------------------------
+        # 🩹 Monkey-patch np.load ให้ allow_pickle=True เป็นค่า default
+        # เหตุผล: onnx2tf มีไฟล์ทดสอบภายใน (test image data) ที่บันทึกไว้แบบ
+        # pickled array ตั้งแต่ NumPy เวอร์ชันเก่า แต่ NumPy เวอร์ชันใหม่ๆ
+        # (ที่เรา pin ไว้ 1.26.4) เปลี่ยน default เป็น allow_pickle=False
+        # เพื่อความปลอดภัย ทำให้โหลดไฟล์เดิมของ onnx2tf ไม่ได้
+        # ไฟล์นี้เป็นไฟล์ที่มากับตัว onnx2tf package เอง (ไม่ใช่ข้อมูลที่ผู้ใช้
+        # อัปโหลดเข้ามา) จึงเปิด allow_pickle ได้อย่างปลอดภัยในจุดนี้
+        _original_np_load = np.load
+
+        def _patched_np_load(*args, **kwargs):
+            kwargs.setdefault("allow_pickle", True)
+            return _original_np_load(*args, **kwargs)
+
+        np.load = _patched_np_load
 
         onnx_file = request.files["model"]
         onnx_path = os.path.join(tmp_dir, "model.onnx")
