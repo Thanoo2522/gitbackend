@@ -8,6 +8,7 @@ numpy==1.26.4
 
 onnx==1.16.1
 onnx2tf>=1.17.0
+onnxsim
 psutil
 ai-edge-litert
 

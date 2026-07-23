@@ -112,7 +112,6 @@ def convert_to_tflite():
         onnx2tf.convert(
             input_onnx_file_path=onnx_path,
             output_folder_path=output_dir,
-            not_use_onnxsim=True,
         )
 
         tflite_files = [f for f in os.listdir(output_dir) if f.endswith(".tflite")]
