@@ -1,3 +1,20 @@
+# ============================================================
+# 📦 requirements.txt สำหรับ export_service เท่านั้น
+# (ไม่มี GPU — CPU-only wheels — จัดการ ONNX + NCNN เท่านั้น)
+#
+# ⚠️ ห้ามเพิ่ม tensorflow/tensorflow-cpu ในไฟล์นี้เด็ดขาด!
+# torch + tensorflow ชนกันที่ numpy ABI เสมอไม่ว่าจะ pin เวอร์ชันไหนก็ตาม
+# TFLite ถูกแยกไปทำที่ tflite_service (คนละ container) แทนแล้ว
+#
+# ⚠️ onnxslim จำเป็นมาก แม้ export_service นี้จะ export แค่ ONNX/NCNN เอง
+# เพราะ ultralytics จะ "slim" (จัดระเบียบ) กราฟ ONNX ให้อัตโนมัติระหว่าง
+# export ถ้าเจอ onnxslimติดตั้งอยู่ — ถ้าไม่มี onnxslim ไฟล์ ONNX ที่ได้จะมี
+# โครงสร้างกราฟที่ไม่ผ่านการจัดระเบียบ ทำให้ onnx2tf (ที่ tflite_service ใช้
+# แปลงเป็น TFLite ทีหลัง) สับสนกับ Conv/ConvTranspose บางแบบ (คิดว่าเป็น
+# quantized model ทั้งที่ไม่ใช่) จนพังตอนแปลง — ต้อง pin เวอร์ชันเดียวกับที่
+# Ultralytics ทดสอบไว้ (0.1.31) เพื่อผลลัพธ์ที่แน่นอนตรงกัน
+# ============================================================
+
 Flask
 flask-cors
 gunicorn
@@ -11,5 +28,6 @@ torch
 torchvision
 
 ultralytics==8.3.0
-onnx>=1.14.0
+onnx==1.16.1
 onnxscript>=0.1.0
+onnxslim==0.1.31
