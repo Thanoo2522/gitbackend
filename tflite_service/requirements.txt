@@ -1,32 +1,16 @@
-# ============================================================
-# 📦 requirements.txt สำหรับ tflite_service เท่านั้น
-# (tensorflow ล้วนๆ — ห้ามเพิ่ม torch/ultralytics ในไฟล์นี้เด็ดขาด!
-#  ถ้าเพิ่มจะชนกับ tensorflow ที่ numpy ABI ทันที เหมือนที่เจอใน export_service)
-# ============================================================
-
 Flask
 flask-cors
 gunicorn
 
-# ⚠️ Pin แบบเจาะจงเวอร์ชันเดียว (ไม่ใช่ช่วงกว้างๆ) เพื่อลดความกำกวมตอน pip
-# resolve dependency — ก่อนหน้านี้เคยเจอ "module numpy._globals has no
-# attribute '_signature_descriptor'" เพราะจำกัด numpy<1.24 ไว้ (ค่านี้ copy
-# มาจาก export_service ที่ต้องเข้ากับ ultralytics/opencv เก่า แต่ที่นี่ไม่มี
-# ultralytics เลย ข้อจำกัดนั้นเลยไม่จำเป็นและไปบังคับให้ลง numpy รุ่นที่มี
-# ABI ไม่ตรงกับ tensorflow-cpu wheel ที่ build มา) ปล่อยให้ tensorflow-cpu
-# เป็นตัวกำหนด numpy ที่เข้ากันได้จริงแทน
 tensorflow-cpu==2.15.0
 numpy==1.26.4
 
-# แปลง ONNX -> TensorFlow SavedModel -> TFLite (แกนหลักของ service นี้)
 onnx>=1.14.0
 onnx2tf>=1.17.0
 
-# dependency ย่อยที่ onnx2tf เรียกใช้ภายใน (ขาดตัวไหนจะ error ทีละตัว)
 sng4onnx>=1.0.1
 onnxslim>=0.1.31
 onnx-graphsurgeon>=0.3.26
 onnxruntime
 
-# onnx2tf ใช้ตอน parse/เขียนไฟล์ .tflite ตอนท้าย pipeline
 flatbuffers>=23.5.26,<100

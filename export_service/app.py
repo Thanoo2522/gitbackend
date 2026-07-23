@@ -16,7 +16,7 @@ Deploy service นี้แยกเป็น Cloud Run service ใหม่:
   WORKER_FIREBASE_KEY  (Service Account JSON เดียวกับที่ gitbackend-gpu ใช้
                         เพื่อให้เข้าถึง Storage bucket เดียวกัน อ่าน best.pt
                         ที่เทรนไว้ และเขียนไฟล์ export กลับไปที่เดิม)
-======================================================== 
+==============================================================
 """
 
 from flask import Flask, request, jsonify, send_file
@@ -30,6 +30,7 @@ import tempfile
 import shutil
 import traceback
 import zipfile
+import requests
 
 import firebase_admin
 from firebase_admin import credentials, firestore, storage
@@ -87,15 +88,24 @@ edge_export_status = {}   # key = f"{email}/{project}/{edge_format}"
 
 VALID_EDGE_FORMATS = ("onnx", "tflite", "ncnn", "engine")
 
+# 🌐 TFLITE_SERVICE_URL (ไม่บังคับ แต่ต้องตั้งค่าถ้าจะใช้ TFLite export)
+# ⚠️ เหตุผลที่ต้องแยก TFLite ออกเป็น service อื่น:
+# torch/ultralytics (ที่ใช้ export ONNX/NCNN) กับ tensorflow (ที่ใช้แปลง TFLite)
+# ชนกันที่ตัว numpy เสมอไม่ว่าจะ pin เวอร์ชันไหนก็ตาม (เจอ AttributeError หลาย
+# แบบสลับกันไปทุกครั้งที่ปรับเวอร์ชัน) เพราะทั้งสองฝั่งต้องการ numpy ABI ต่างกัน
+# วิธีแก้ที่ยั่งยืน: ให้ export_service (torch, ไม่มี tensorflow) export เป็น
+# ONNX ก่อนเสมอ แล้วส่งไฟล์ .onnx ไปให้ tflite_service (tensorflow ล้วนๆ ไม่มี
+# torch) แปลงเป็น .tflite ให้ต่างหาก คนละ container คนละ environment กันเลย
+TFLITE_SERVICE_URL = os.environ.get("TFLITE_SERVICE_URL")
+
 EDGE_FORMAT_MAP = {
     "onnx": "onnx",
-    "tflite": "tflite",
     "ncnn": "ncnn",
 }
 
 EDGE_FORMAT_IS_DIR = {
     "onnx": False,
-    "tflite": True,
+    "tflite": False,   # ตอนนี้ได้ไฟล์ .tflite เดี่ยวกลับมาจาก tflite_service ไม่ใช่ directory แล้ว
     "ncnn": True,
 }
 
@@ -166,10 +176,45 @@ def run_edge_export(email, project, edge_format):
 
         if edge_format == "engine":
             export_kwargs = {"format": "onnx", "imgsz": 640}
+            exported_path = model.export(**export_kwargs)
+
+        elif edge_format == "tflite":
+            # ----------------------------------------------------
+            # 2a) TFLite: export เป็น ONNX ก่อนด้วย ultralytics (torch ล้วนๆ
+            #     ไม่แตะ tensorflow เลยตรงนี้) แล้วส่งไฟล์ไปให้ tflite_service
+            #     (คนละ container, มีแค่ tensorflow ไม่มี torch) แปลงให้แทน
+            # ----------------------------------------------------
+            if not TFLITE_SERVICE_URL:
+                raise RuntimeError(
+                    "ยังไม่ได้ตั้งค่า TFLITE_SERVICE_URL — ต้อง deploy tflite_service "
+                    "แยกต่างหากก่อน แล้วตั้งค่า Environment Variable นี้ใน export_service"
+                )
+
+            onnx_path = model.export(format="onnx", imgsz=640)
+            edge_export_status[key]["progress"] = 55
+
+            with open(onnx_path, "rb") as f:
+                tflite_resp = requests.post(
+                    f"{TFLITE_SERVICE_URL.rstrip('/')}/convert_to_tflite",
+                    files={"model": ("model.onnx", f, "application/octet-stream")},
+                    timeout=280
+                )
+
+            tflite_resp.raise_for_status()
+            tflite_result = tflite_resp.json()
+
+            if not tflite_result.get("success"):
+                raise RuntimeError(f"tflite_service แปลงไฟล์ไม่สำเร็จ: {tflite_result.get('message')}")
+
+            import base64
+            tflite_bytes = base64.b64decode(tflite_result["tflite_base64"])
+            exported_path = os.path.join(tmp_dir, tflite_result.get("filename", "model_float32.tflite"))
+            with open(exported_path, "wb") as out_f:
+                out_f.write(tflite_bytes)
+
         else:
             export_kwargs = {"format": EDGE_FORMAT_MAP[edge_format], "imgsz": 640}
-
-        exported_path = model.export(**export_kwargs)
+            exported_path = model.export(**export_kwargs)
 
         edge_export_status[key]["progress"] = 80
 
