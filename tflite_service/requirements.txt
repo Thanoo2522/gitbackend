@@ -8,6 +8,7 @@ numpy==1.26.4
 
 onnx==1.16.1
 onnx2tf>=1.17.0
+psutil
 
 sng4onnx>=1.0.1
 onnxslim>=0.1.31
