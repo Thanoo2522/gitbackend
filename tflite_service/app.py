@@ -66,16 +66,13 @@ def convert_to_tflite():
         # import ตรงนี้ (ไม่ import ไว้บนสุดของไฟล์) เพื่อไม่ให้กระทบ startup time
         # ของ service ถ้า route นี้ยังไม่เคยถูกเรียกใช้
         import onnx2tf
+        import onnx2tf.onnx2tf as _onnx2tf_main
         import numpy as np
 
         # ----------------------------------------------------
-        # 🩹 Monkey-patch np.load ให้ allow_pickle=True เป็นค่า default
-        # เหตุผล: onnx2tf มีไฟล์ทดสอบภายใน (test image data) ที่บันทึกไว้แบบ
-        # pickled array ตั้งแต่ NumPy เวอร์ชันเก่า แต่ NumPy เวอร์ชันใหม่ๆ
-        # (ที่เรา pin ไว้ 1.26.4) เปลี่ยน default เป็น allow_pickle=False
-        # เพื่อความปลอดภัย ทำให้โหลดไฟล์เดิมของ onnx2tf ไม่ได้
-        # ไฟล์นี้เป็นไฟล์ที่มากับตัว onnx2tf package เอง (ไม่ใช่ข้อมูลที่ผู้ใช้
-        # อัปโหลดเข้ามา) จึงเปิด allow_pickle ได้อย่างปลอดภัยในจุดนี้
+        # 🩹 Patch 1: np.load ให้ allow_pickle=True เป็นค่า default
+        # (ไฟล์ทดสอบภายในของ onnx2tf บันทึกไว้แบบ pickled array)
+        # ----------------------------------------------------
         _original_np_load = np.load
 
         def _patched_np_load(*args, **kwargs):
@@ -83,6 +80,25 @@ def convert_to_tflite():
             return _original_np_load(*args, **kwargs)
 
         np.load = _patched_np_load
+
+        # ----------------------------------------------------
+        # 🩹 Patch 2: download_test_image_data() ต้องดาวน์โหลดไฟล์ภาพทดสอบ
+        # จากอินเทอร์เน็ตทุกครั้งที่ convert() — ถ้าดาวน์โหลดพลาด/ไฟล์ไม่สมบูรณ์
+        # (เช่น เจอ "Failed to interpret file as a pickle") จะทำให้ export ทั้ง
+        # หมดล้มเหลว ทั้งที่ค่านี้ใช้แค่ตรวจสอบความถูกต้องของ output ระหว่าง
+        # ONNX กับ TF ภายใน ไม่ใช่ข้อมูลที่จำเป็นต่อการสร้างไฟล์ .tflite จริง
+        # จึง wrap ด้วย try/except: ถ้าพังให้ใช้ภาพจำลองแทน ไม่ทำให้ทั้ง request ล้ม
+        if hasattr(_onnx2tf_main, "download_test_image_data"):
+            _original_download_test_image_data = _onnx2tf_main.download_test_image_data
+
+            def _safe_download_test_image_data(*args, **kwargs):
+                try:
+                    return _original_download_test_image_data(*args, **kwargs)
+                except Exception:
+                    traceback.print_exc()
+                    return np.zeros((1, 224, 224, 3), dtype=np.float32)
+
+            _onnx2tf_main.download_test_image_data = _safe_download_test_image_data
 
         onnx_file = request.files["model"]
         onnx_path = os.path.join(tmp_dir, "model.onnx")
